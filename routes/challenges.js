@@ -11,7 +11,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    const challenge = new Challenge({ title, description, startDate, endDate, owner });
+    const challenge = new Challenge({ title, description, startDate, endDate, owner, participants: [owner] });
     await challenge.save();
 
     res.status(201).json({
@@ -56,10 +56,45 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+// Join challenge
+router.post('/:id/join', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required to join a challenge' });
+    }
+
+    const challenge = await Challenge.findById(id);
+
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (challenge.participants.some(participant => participant.equals(userId))) {
+      return res.status(400).json({ message: 'You have already joined this challenge' });
+    }
+
+    challenge.participants.push(userId);
+    await challenge.save();
+
+    res.json({
+      message: 'Successfully joined the challenge',
+      challenge
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error joining challenge', error: error.message });
+  }
+});
+
 // Get all challenges
 router.get('/', async (req, res) => {
   try {
-    const challenges = await Challenge.find({}).sort({ createdAt: -1 }).populate('owner', 'name');
+    const challenges = await Challenge.find({})
+      .sort({ createdAt: -1 })
+      .populate('owner', 'name')
+      .populate('participants', 'name');
     res.json({ challenges });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
@@ -75,7 +110,13 @@ router.get('/user/:userId', async (req, res) => {
       return res.status(400).json({ message: 'User ID is required' });
     }
 
-    const challenges = await Challenge.find({ owner: userId }).sort({ createdAt: -1 });
+    const challenges = await Challenge.find({
+      $or: [{ owner: userId }, { participants: userId }]
+    })
+      .sort({ createdAt: -1 })
+      .populate('owner', 'name')
+      .populate('participants', 'name');
+
     res.json({ challenges });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
