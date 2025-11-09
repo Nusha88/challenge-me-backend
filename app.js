@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const authRoutes = require('./routes/auth');
+const challengeRoutes = require('./routes/challenges');
 
 // Check for required environment variables
 if (!process.env.ATLAS_URI) {
@@ -59,6 +60,7 @@ app.get('/', (req, res) => {
 
 // API Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/challenges', challengeRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
