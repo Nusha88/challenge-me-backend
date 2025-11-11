@@ -33,7 +33,6 @@ router.get('/users', async (req, res) => {
       name: 1,
       age: 1,
       country: 1,
-      plan: 1,
       createdAt: 1,
       _id: 1
     }).sort({ createdAt: -1 });
@@ -55,21 +54,21 @@ router.get('/users', async (req, res) => {
 // Register a new user
 router.post('/register', async (req, res) => {
   try {
-    const { name, age, country, plan, password } = req.body;
-    if (!name || !age || !country || !plan || !password) {
+    const { name, age, country, password } = req.body;
+    if (!name || age === undefined || age === null || !country || !password) {
       return res.status(400).json({
         message: 'All fields are required'
       });
     }
-    if (age < 0 || age > 120) {
+    const ageNumber = Number(age);
+    if (!Number.isInteger(ageNumber)) {
       return res.status(400).json({
-        message: 'Age must be between 0 and 120'
+        message: 'Age must be a whole number'
       });
     }
-    const validPlans = ['Energy', 'Present', 'Future'];
-    if (!validPlans.includes(plan)) {
+    if (ageNumber < 12 || ageNumber > 99) {
       return res.status(400).json({
-        message: 'Invalid plan selected'
+        message: 'Age must be between 12 and 99'
       });
     }
     if (typeof password !== 'string' || password.length < 6) {
@@ -85,9 +84,9 @@ router.post('/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({
       name,
-      age,
+      age: ageNumber,
       country,
-      plan,
+      avatarUrl: req.body.avatarUrl || '',
       password: hashedPassword
     });
     await user.save();
@@ -101,7 +100,7 @@ router.post('/register', async (req, res) => {
         name: user.name,
         age: user.age,
         country: user.country,
-        plan: user.plan,
+        avatarUrl: user.avatarUrl,
         createdAt: user.createdAt
       }
     });
@@ -139,7 +138,7 @@ router.post('/login', async (req, res) => {
         name: user.name,
         age: user.age,
         country: user.country,
-        plan: user.plan,
+        avatarUrl: user.avatarUrl,
         createdAt: user.createdAt
       }
     });
@@ -156,7 +155,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
       name: 1,
       age: 1,
       country: 1,
-      plan: 1,
+      avatarUrl: 1,
       createdAt: 1,
       _id: 1
     });
@@ -166,6 +165,65 @@ router.get('/profile', authenticateToken, async (req, res) => {
     res.json({ user });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching profile', error: error.message });
+  }
+});
+
+// Update current user's profile (protected)
+router.put('/profile', authenticateToken, async (req, res) => {
+  try {
+    const updates = {};
+    const { name, age, country, avatarUrl } = req.body;
+
+    if (name !== undefined) {
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ message: 'Name must be provided' });
+      }
+      updates.name = name.trim();
+    }
+
+    if (age !== undefined) {
+      const ageNumber = Number(age);
+      if (!Number.isInteger(ageNumber) || ageNumber < 12 || ageNumber > 99) {
+        return res.status(400).json({ message: 'Age must be an integer between 12 and 99' });
+      }
+      updates.age = ageNumber;
+    }
+
+    if (country !== undefined) {
+      if (typeof country !== 'string' || country.length !== 2) {
+        return res.status(400).json({ message: 'Country must be a two-letter code' });
+      }
+      updates.country = country.toUpperCase();
+    }
+
+    if (avatarUrl !== undefined) {
+      if (avatarUrl && typeof avatarUrl !== 'string') {
+        return res.status(400).json({ message: 'Avatar URL must be a string' });
+      }
+      updates.avatarUrl = avatarUrl;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: 'No valid fields provided for update' });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { $set: updates },
+      { new: true, select: 'name age country avatarUrl createdAt _id' }
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      message: 'Profile updated successfully',
+      user
+    });
+  } catch (error) {
+    console.error('Profile update error:', error);
+    res.status(500).json({ message: 'Error updating profile', error: error.message });
   }
 });
 

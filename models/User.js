@@ -11,19 +11,17 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
   age: {
     type: Number,
     required: true,
-    min: 0,
-    max: 120
+    min: 12,
+    max: 99
   },
   country: {
     type: String,
     required: true,
     trim: true
   },
-  plan: {
+  avatarUrl: {
     type: String,
-    required: true,
-    enum: ['Energy', 'Present', 'Future'],
-    default: 'Energy'
+    default: ''
   },
   password: {
     type: String,
