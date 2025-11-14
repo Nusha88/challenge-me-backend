@@ -29,9 +29,28 @@ const challengeSchema = new mongoose.Schema(
     },
     frequency: {
       type: String,
-      enum: ['daily', 'everyOtherDay', 'weekdays'],
-      default: null
+      default: null,
+      required: false,
+      validate: {
+        validator: function(v) {
+          // Allow null/undefined for result challenges, or valid enum values for habit challenges
+          return v === null || v === undefined || v === '' || ['daily', 'everyOtherDay', 'weekdays'].includes(v);
+        },
+        message: '{VALUE} is not a valid frequency'
+      }
     },
+    actions: [
+      {
+        text: {
+          type: String,
+          default: ''
+        },
+        checked: {
+          type: Boolean,
+          default: false
+        }
+      }
+    ],
     startDate: {
       type: Date,
       required: true
