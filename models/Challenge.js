@@ -13,6 +13,25 @@ const challengeSchema = new mongoose.Schema(
       required: true,
       trim: true
     },
+    imageUrl: {
+      type: String,
+      default: ''
+    },
+    privacy: {
+      type: String,
+      enum: ['public', 'private'],
+      default: 'public'
+    },
+    challengeType: {
+      type: String,
+      enum: ['habit', 'result'],
+      default: 'habit'
+    },
+    frequency: {
+      type: String,
+      enum: ['daily', 'everyOtherDay', 'weekdays'],
+      default: null
+    },
     startDate: {
       type: Date,
       required: true

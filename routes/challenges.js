@@ -5,13 +5,27 @@ const Challenge = require('../models/Challenge');
 // Create challenge
 router.post('/', async (req, res) => {
   try {
-    const { title, description, startDate, endDate, owner } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency } = req.body;
 
     if (!title || !description || !startDate || !endDate || !owner) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    const challenge = new Challenge({ title, description, startDate, endDate, owner, participants: [owner] });
+    const challengeData = { title, description, startDate, endDate, owner, participants: [owner] };
+    if (imageUrl) {
+      challengeData.imageUrl = imageUrl;
+    }
+    if (privacy) {
+      challengeData.privacy = privacy;
+    }
+    if (challengeType) {
+      challengeData.challengeType = challengeType;
+    }
+    if (frequency && challengeType === 'habit') {
+      challengeData.frequency = frequency;
+    }
+
+    const challenge = new Challenge(challengeData);
     await challenge.save();
 
     res.status(201).json({
@@ -27,7 +41,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, startDate, endDate, owner } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency } = req.body;
 
     if (!title || !description || !startDate || !endDate) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -36,6 +50,20 @@ router.put('/:id', async (req, res) => {
     const update = { title, description, startDate, endDate };
     if (owner) {
       update.owner = owner;
+    }
+    if (imageUrl !== undefined) {
+      update.imageUrl = imageUrl;
+    }
+    if (privacy !== undefined) {
+      update.privacy = privacy;
+    }
+    if (challengeType !== undefined) {
+      update.challengeType = challengeType;
+    }
+    if (frequency !== undefined && challengeType === 'habit') {
+      update.frequency = frequency;
+    } else if (challengeType === 'result') {
+      update.frequency = null;
     }
 
     const challenge = await Challenge.findByIdAndUpdate(id, update, {

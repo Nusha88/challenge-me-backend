@@ -31,6 +31,7 @@ router.get('/users', async (req, res) => {
     }
     const users = await User.find({}, {
       name: 1,
+      email: 1,
       age: 1,
       country: 1,
       createdAt: 1,
@@ -54,10 +55,16 @@ router.get('/users', async (req, res) => {
 // Register a new user
 router.post('/register', async (req, res) => {
   try {
-    const { name, age, country, password } = req.body;
-    if (!name || age === undefined || age === null || !country || !password) {
+    const { name, email, age, country, password } = req.body;
+    if (!name || !email || age === undefined || age === null || !country || !password) {
       return res.status(400).json({
         message: 'All fields are required'
+      });
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({
+        message: 'Invalid email format'
       });
     }
     const ageNumber = Number(age);
@@ -76,14 +83,20 @@ router.post('/register', async (req, res) => {
         message: 'Password must be at least 6 characters'
       });
     }
-    // Check for duplicate name
-    const existingUser = await User.findOne({ name });
+    // Check for duplicate name or email
+    const existingUser = await User.findOne({ $or: [{ name }, { email: email.trim().toLowerCase() }] });
     if (existingUser) {
-      return res.status(409).json({ message: 'A user with this name already exists' });
+      if (existingUser.name === name) {
+        return res.status(409).json({ message: 'A user with this name already exists' });
+      }
+      if (existingUser.email === email.trim().toLowerCase()) {
+        return res.status(409).json({ message: 'A user with this email already exists' });
+      }
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({
       name,
+      email: email.trim().toLowerCase(),
       age: ageNumber,
       country,
       avatarUrl: req.body.avatarUrl || '',
@@ -98,6 +111,7 @@ router.post('/register', async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
+        email: user.email,
         age: user.age,
         country: user.country,
         avatarUrl: user.avatarUrl,
@@ -116,17 +130,21 @@ router.post('/register', async (req, res) => {
 // Login endpoint
 router.post('/login', async (req, res) => {
   try {
-    const { name, password } = req.body;
-    if (!name || !password) {
-      return res.status(400).json({ message: 'Name and password are required' });
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
     }
-    const user = await User.findOne({ name });
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ message: 'Invalid email format' });
+    }
+    const user = await User.findOne({ email: email.trim().toLowerCase() });
     if (!user || !user.password) {
-      return res.status(401).json({ message: 'Invalid name or password' });
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid name or password' });
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
     // Generate JWT
     const token = jwt.sign({ id: user._id, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
@@ -136,6 +154,7 @@ router.post('/login', async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
+        email: user.email,
         age: user.age,
         country: user.country,
         avatarUrl: user.avatarUrl,
@@ -153,6 +172,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id, {
       name: 1,
+      email: 1,
       age: 1,
       country: 1,
       avatarUrl: 1,
@@ -172,13 +192,27 @@ router.get('/profile', authenticateToken, async (req, res) => {
 router.put('/profile', authenticateToken, async (req, res) => {
   try {
     const updates = {};
-    const { name, age, country, avatarUrl } = req.body;
+    const { name, email, age, country, avatarUrl } = req.body;
 
     if (name !== undefined) {
       if (!name || typeof name !== 'string' || !name.trim()) {
         return res.status(400).json({ message: 'Name must be provided' });
       }
       updates.name = name.trim();
+    }
+
+    if (email !== undefined) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!email || typeof email !== 'string' || !emailRegex.test(email.trim())) {
+        return res.status(400).json({ message: 'Invalid email format' });
+      }
+      const normalizedEmail = email.trim().toLowerCase();
+      // Check if email is already taken by another user
+      const existingUser = await User.findOne({ email: normalizedEmail, _id: { $ne: req.user.id } });
+      if (existingUser) {
+        return res.status(409).json({ message: 'A user with this email already exists' });
+      }
+      updates.email = normalizedEmail;
     }
 
     if (age !== undefined) {
@@ -210,7 +244,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.user.id,
       { $set: updates },
-      { new: true, select: 'name age country avatarUrl createdAt _id' }
+      { new: true, select: 'name email age country avatarUrl createdAt _id' }
     );
 
     if (!user) {

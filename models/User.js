@@ -8,6 +8,14 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     trim: true,
     unique: true
   },
+  email: {
+    type: String,
+    required: true,
+    trim: true,
+    lowercase: true,
+    unique: true,
+    match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email address']
+  },
   age: {
     type: Number,
     required: true,
