@@ -164,4 +164,25 @@ router.get('/user/:userId', async (req, res) => {
   }
 });
 
+// Delete challenge
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const challenge = await Challenge.findById(id);
+
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    await Challenge.findByIdAndDelete(id);
+
+    res.json({
+      message: 'Challenge deleted successfully'
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting challenge', error: error.message });
+  }
+});
+
 module.exports = router;
