@@ -5,13 +5,20 @@ const Challenge = require('../models/Challenge');
 // Create challenge
 router.post('/', async (req, res) => {
   try {
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays } = req.body;
 
     if (!title || !description || !startDate || !endDate || !owner) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    const challengeData = { title, description, startDate, endDate, owner, participants: [owner] };
+    const challengeData = { 
+      title, 
+      description, 
+      startDate, 
+      endDate, 
+      owner, 
+      participants: [{ userId: owner, completedDays: [] }] 
+    };
     if (imageUrl) {
       challengeData.imageUrl = imageUrl;
     }
@@ -32,6 +39,9 @@ router.post('/', async (req, res) => {
     if (actions && challengeType === 'result') {
       challengeData.actions = actions;
     }
+    if (completedDays && challengeType === 'habit') {
+      challengeData.completedDays = completedDays;
+    }
 
     const challenge = new Challenge(challengeData);
     await challenge.save();
@@ -49,7 +59,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays } = req.body;
 
     if (!title || !description || !startDate || !endDate) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -78,7 +88,6 @@ router.put('/:id', async (req, res) => {
     } else if (challengeType === 'habit') {
       update.actions = [];
     }
-
     const challenge = await Challenge.findByIdAndUpdate(id, update, {
       new: true,
       runValidators: true
@@ -86,6 +95,24 @@ router.put('/:id', async (req, res) => {
 
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    // Handle owner's completedDays - save to their participant entry
+    if (challengeType === 'habit' && completedDays !== undefined && owner) {
+      // Find owner's participant entry
+      const ownerIndex = challenge.participants.findIndex(
+        p => p.userId && p.userId.toString() === owner.toString()
+      );
+      
+      if (ownerIndex !== -1) {
+        // Update owner's completedDays in their participant entry
+        challenge.participants[ownerIndex].completedDays = Array.isArray(completedDays) ? completedDays : [];
+      } else {
+        // If owner is not in participants, add them
+        challenge.participants.push({ userId: owner, completedDays: Array.isArray(completedDays) ? completedDays : [] });
+      }
+      
+      await challenge.save();
     }
 
     res.json({
@@ -113,11 +140,17 @@ router.post('/:id/join', async (req, res) => {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    if (challenge.participants.some(participant => participant.equals(userId))) {
+    // Check if user is already a participant
+    const existingParticipant = challenge.participants.find(
+      p => p.userId && p.userId.toString() === userId.toString()
+    );
+    
+    if (existingParticipant) {
       return res.status(400).json({ message: 'You have already joined this challenge' });
     }
 
-    challenge.participants.push(userId);
+    // Add new participant with empty completedDays array
+    challenge.participants.push({ userId, completedDays: [] });
     await challenge.save();
 
     res.json({
@@ -135,10 +168,48 @@ router.get('/', async (req, res) => {
     const challenges = await Challenge.find({})
       .sort({ createdAt: -1 })
       .populate('owner', 'name')
-      .populate('participants', 'name');
+      .populate('participants.userId', 'name');
     res.json({ challenges });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
+  }
+});
+
+// Update participant's completedDays
+router.put('/:id/participant/:userId/completedDays', async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+    const { completedDays } = req.body;
+
+    if (!completedDays || !Array.isArray(completedDays)) {
+      return res.status(400).json({ message: 'completedDays must be an array' });
+    }
+
+    const challenge = await Challenge.findById(id);
+
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    // Find the participant
+    const participantIndex = challenge.participants.findIndex(
+      p => p.userId && p.userId.toString() === userId.toString()
+    );
+
+    if (participantIndex === -1) {
+      return res.status(404).json({ message: 'Participant not found in this challenge' });
+    }
+
+    // Update completedDays for this participant
+    challenge.participants[participantIndex].completedDays = completedDays;
+    await challenge.save();
+
+    res.json({
+      message: 'Completed days updated successfully',
+      challenge
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating completed days', error: error.message });
   }
 });
 
@@ -152,11 +223,14 @@ router.get('/user/:userId', async (req, res) => {
     }
 
     const challenges = await Challenge.find({
-      $or: [{ owner: userId }, { participants: userId }]
+      $or: [
+        { owner: userId }, 
+        { 'participants.userId': userId }
+      ]
     })
       .sort({ createdAt: -1 })
       .populate('owner', 'name')
-      .populate('participants', 'name');
+      .populate('participants.userId', 'name');
 
     res.json({ challenges });
   } catch (error) {
