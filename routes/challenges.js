@@ -140,6 +140,11 @@ router.post('/:id/join', async (req, res) => {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
+    // Only habit challenges can be joined
+    if (challenge.challengeType !== 'habit') {
+      return res.status(400).json({ message: 'Only habit challenges can be joined' });
+    }
+
     // Check if user is already a participant
     const existingParticipant = challenge.participants.find(
       p => p.userId && p.userId.toString() === userId.toString()
