@@ -172,8 +172,8 @@ router.get('/', async (req, res) => {
   try {
     const challenges = await Challenge.find({})
       .sort({ createdAt: -1 })
-      .populate('owner', 'name')
-      .populate('participants.userId', 'name');
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
     res.json({ challenges });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
@@ -234,12 +234,30 @@ router.get('/user/:userId', async (req, res) => {
       ]
     })
       .sort({ createdAt: -1 })
-      .populate('owner', 'name')
-      .populate('participants.userId', 'name');
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
 
     res.json({ challenges });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
+  }
+});
+
+// Get challenge by ID (must be after more specific routes like /user/:userId)
+router.get('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const challenge = await Challenge.findById(id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+    
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+    
+    res.json(challenge);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching challenge', error: error.message });
   }
 });
 

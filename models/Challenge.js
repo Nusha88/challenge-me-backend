@@ -48,6 +48,21 @@ const challengeSchema = new mongoose.Schema(
         checked: {
           type: Boolean,
           default: false
+        },
+        children: {
+          type: [
+            {
+              text: {
+                type: String,
+                default: ''
+              },
+              checked: {
+                type: Boolean,
+                default: false
+              }
+            }
+          ],
+          default: []
         }
       }
     ],
