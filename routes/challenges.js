@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const Challenge = require('../models/Challenge');
+const User = require('../models/User');
 
 // Create challenge
 router.post('/', async (req, res) => {
   try {
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments } = req.body;
 
     if (!title || !description || !startDate || !endDate || !owner) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -42,6 +43,9 @@ router.post('/', async (req, res) => {
     if (completedDays && challengeType === 'habit') {
       challengeData.completedDays = completedDays;
     }
+    if (allowComments !== undefined) {
+      challengeData.allowComments = allowComments;
+    }
 
     const challenge = new Challenge(challengeData);
     await challenge.save();
@@ -59,7 +63,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments } = req.body;
 
     if (!title || !description || !startDate || !endDate) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -87,6 +91,9 @@ router.put('/:id', async (req, res) => {
       update.actions = actions;
     } else if (challengeType === 'habit') {
       update.actions = [];
+    }
+    if (allowComments !== undefined) {
+      update.allowComments = allowComments;
     }
     const challenge = await Challenge.findByIdAndUpdate(id, update, {
       new: true,
@@ -279,6 +286,467 @@ router.delete('/:id', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Error deleting challenge', error: error.message });
+  }
+});
+
+// Watch a challenge
+router.post('/:id/watch', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check if already watching
+    if (user.watchedChallenges.includes(challenge._id)) {
+      return res.status(400).json({ message: 'Challenge is already being watched' });
+    }
+
+    user.watchedChallenges.push(challenge._id);
+    await user.save();
+
+    res.json({ message: 'Challenge added to watch list', watchedChallenges: user.watchedChallenges });
+  } catch (error) {
+    res.status(500).json({ message: 'Error watching challenge', error: error.message });
+  }
+});
+
+// Unwatch a challenge
+router.post('/:id/unwatch', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Remove from watched challenges
+    user.watchedChallenges = user.watchedChallenges.filter(
+      id => id.toString() !== challenge._id.toString()
+    );
+    await user.save();
+
+    res.json({ message: 'Challenge removed from watch list', watchedChallenges: user.watchedChallenges });
+  } catch (error) {
+    res.status(500).json({ message: 'Error unwatching challenge', error: error.message });
+  }
+});
+
+// Get watched challenges for a user
+router.get('/watched/:userId', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId).populate('watchedChallenges');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Populate challenge details
+    const challenges = await Challenge.find({ _id: { $in: user.watchedChallenges } })
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl')
+      .sort({ createdAt: -1 });
+
+    res.json({ challenges });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching watched challenges', error: error.message });
+  }
+});
+
+// Add a comment to a challenge
+router.post('/:id/comments', async (req, res) => {
+  try {
+    const { userId, text } = req.body;
+    
+    if (!userId || !text || !text.trim()) {
+      return res.status(400).json({ message: 'User ID and comment text are required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (!challenge.allowComments) {
+      return res.status(403).json({ message: 'Comments are disabled for this challenge' });
+    }
+
+    const comment = {
+      userId,
+      text: text.trim(),
+      createdAt: new Date()
+    };
+
+    challenge.comments.push(comment);
+    await challenge.save();
+
+    // Populate user info for the new comment
+    await challenge.populate('comments.userId', 'name avatarUrl');
+
+    const newComment = challenge.comments[challenge.comments.length - 1];
+    res.status(201).json({ message: 'Comment added successfully', comment: newComment });
+  } catch (error) {
+    res.status(500).json({ message: 'Error adding comment', error: error.message });
+  }
+});
+
+// Get comments for a challenge
+router.get('/:id/comments', async (req, res) => {
+  try {
+    const challenge = await Challenge.findById(req.params.id)
+      .populate('comments.userId', 'name avatarUrl')
+      .populate('comments.replies.userId', 'name avatarUrl')
+      .populate('comments.replies.mentionedUserId', 'name avatarUrl')
+      .select('comments allowComments');
+    
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    // Manually populate nested replies (replies to replies) since Mongoose doesn't support deep nested populate
+    const User = require('../models/User');
+    for (const comment of challenge.comments) {
+      if (comment.replies && comment.replies.length > 0) {
+        for (const reply of comment.replies) {
+          if (reply.replies && reply.replies.length > 0) {
+            for (const nestedReply of reply.replies) {
+              // Populate userId for nested replies
+              if (nestedReply.userId && !nestedReply.userId.name) {
+                const userId = nestedReply.userId._id || nestedReply.userId;
+                const user = await User.findById(userId).select('name avatarUrl');
+                if (user) {
+                  nestedReply.userId = user;
+                }
+              }
+              // Populate mentionedUserId for nested replies
+              if (nestedReply.mentionedUserId && !nestedReply.mentionedUserId.name) {
+                const mentionedUserId = nestedReply.mentionedUserId._id || nestedReply.mentionedUserId;
+                const mentionedUser = await User.findById(mentionedUserId).select('name avatarUrl');
+                if (mentionedUser) {
+                  nestedReply.mentionedUserId = mentionedUser;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    res.json({ 
+      comments: challenge.comments || [],
+      allowComments: challenge.allowComments 
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching comments', error: error.message });
+  }
+});
+
+// Reply to a comment
+router.post('/:id/comments/:commentId/reply', async (req, res) => {
+  try {
+    const { userId, text, mentionedUserId } = req.body;
+    
+    if (!userId || !text || !text.trim()) {
+      return res.status(400).json({ message: 'User ID and reply text are required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (!challenge.allowComments) {
+      return res.status(403).json({ message: 'Comments are disabled for this challenge' });
+    }
+
+    const comment = challenge.comments.id(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    const reply = {
+      userId,
+      text: text.trim(),
+      mentionedUserId: mentionedUserId || null,
+      createdAt: new Date()
+    };
+
+    comment.replies.push(reply);
+    await challenge.save();
+
+    // Populate user info for the new reply
+    await challenge.populate('comments.replies.userId', 'name avatarUrl');
+    await challenge.populate('comments.replies.mentionedUserId', 'name avatarUrl');
+
+    const newReply = comment.replies[comment.replies.length - 1];
+    
+    // Create notification if user was mentioned
+    if (mentionedUserId && mentionedUserId.toString() !== userId.toString()) {
+      try {
+        const Notification = require('../models/Notification');
+        await Notification.create({
+          userId: mentionedUserId,
+          type: 'mention',
+          challengeId: challenge._id,
+          commentId: comment._id,
+          replyId: newReply._id,
+          fromUserId: userId
+        });
+      } catch (notifError) {
+        console.error('Error creating notification:', notifError);
+        // Don't fail the reply if notification fails
+      }
+    }
+
+    res.status(201).json({ message: 'Reply added successfully', reply: newReply });
+  } catch (error) {
+    res.status(500).json({ message: 'Error adding reply', error: error.message });
+  }
+});
+
+// Delete a comment (only by owner or comment author)
+router.delete('/:id/comments/:commentId', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const comment = challenge.comments.id(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    // Check if user is owner or comment author
+    const ownerId = challenge.owner?._id || challenge.owner;
+    const commentUserId = comment.userId?._id || comment.userId;
+    
+    if (ownerId.toString() !== userId.toString() && commentUserId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to delete this comment' });
+    }
+
+    comment.deleteOne();
+    await challenge.save();
+
+    res.json({ message: 'Comment deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting comment', error: error.message });
+  }
+});
+
+// Reply to a reply (nested reply)
+router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) => {
+  try {
+    const { userId, text, mentionedUserId } = req.body;
+    
+    if (!userId || !text || !text.trim()) {
+      return res.status(400).json({ message: 'User ID and reply text are required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (!challenge.allowComments) {
+      return res.status(403).json({ message: 'Comments are disabled for this challenge' });
+    }
+
+    const comment = challenge.comments.id(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    const parentReply = comment.replies.id(req.params.replyId);
+    if (!parentReply) {
+      return res.status(404).json({ message: 'Reply not found' });
+    }
+
+    const nestedReply = {
+      userId,
+      text: text.trim(),
+      mentionedUserId: mentionedUserId || null,
+      createdAt: new Date()
+    };
+
+    parentReply.replies.push(nestedReply);
+    await challenge.save();
+
+    // Re-fetch and populate user info for the new nested reply
+    const User = require('../models/User');
+    const updatedChallenge = await Challenge.findById(req.params.id)
+      .populate('comments.userId', 'name avatarUrl')
+      .populate('comments.replies.userId', 'name avatarUrl')
+      .populate('comments.replies.mentionedUserId', 'name avatarUrl');
+    
+    const updatedComment = updatedChallenge.comments.id(req.params.commentId);
+    const updatedParentReply = updatedComment.replies.id(req.params.replyId);
+    const newNestedReply = updatedParentReply.replies[updatedParentReply.replies.length - 1];
+    
+    // Manually populate the nested reply user data
+    if (newNestedReply.userId) {
+      const userId = newNestedReply.userId._id || newNestedReply.userId;
+      const user = await User.findById(userId).select('name avatarUrl');
+      if (user) {
+        newNestedReply.userId = user;
+      }
+    }
+    if (newNestedReply.mentionedUserId) {
+      const mentionedUserId = newNestedReply.mentionedUserId._id || newNestedReply.mentionedUserId;
+      const mentionedUser = await User.findById(mentionedUserId).select('name avatarUrl');
+      if (mentionedUser) {
+        newNestedReply.mentionedUserId = mentionedUser;
+      }
+    }
+    
+    // Create notification if user was mentioned
+    if (mentionedUserId && mentionedUserId.toString() !== userId.toString()) {
+      try {
+        const Notification = require('../models/Notification');
+        await Notification.create({
+          userId: mentionedUserId,
+          type: 'mention',
+          challengeId: challenge._id,
+          commentId: comment._id,
+          replyId: newNestedReply._id,
+          fromUserId: userId
+        });
+      } catch (notifError) {
+        console.error('Error creating notification:', notifError);
+        // Don't fail the reply if notification fails
+      }
+    }
+    
+    // Return the properly populated nested reply
+    res.status(201).json({ 
+      message: 'Nested reply added successfully', 
+      reply: newNestedReply,
+      parentReply: updatedParentReply,
+      comment: updatedComment
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error adding nested reply', error: error.message });
+  }
+});
+
+// Delete a reply (only by owner, comment author, or reply author)
+router.delete('/:id/comments/:commentId/replies/:replyId', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const comment = challenge.comments.id(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    const reply = comment.replies.id(req.params.replyId);
+    if (!reply) {
+      return res.status(404).json({ message: 'Reply not found' });
+    }
+
+    // Check if user is owner, comment author, or reply author
+    const ownerId = challenge.owner?._id || challenge.owner;
+    const commentUserId = comment.userId?._id || comment.userId;
+    const replyUserId = reply.userId?._id || reply.userId;
+    
+    if (ownerId.toString() !== userId.toString() && 
+        commentUserId.toString() !== userId.toString() && 
+        replyUserId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to delete this reply' });
+    }
+
+    reply.deleteOne();
+    await challenge.save();
+
+    res.json({ message: 'Reply deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting reply', error: error.message });
+  }
+});
+
+// Delete a nested reply
+router.delete('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const comment = challenge.comments.id(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    const parentReply = comment.replies.id(req.params.replyId);
+    if (!parentReply) {
+      return res.status(404).json({ message: 'Parent reply not found' });
+    }
+
+    const nestedReply = parentReply.replies.id(req.params.nestedReplyId);
+    if (!nestedReply) {
+      return res.status(404).json({ message: 'Nested reply not found' });
+    }
+
+    // Check if user is owner, comment author, parent reply author, or nested reply author
+    const ownerId = challenge.owner?._id || challenge.owner;
+    const commentUserId = comment.userId?._id || comment.userId;
+    const parentReplyUserId = parentReply.userId?._id || parentReply.userId;
+    const nestedReplyUserId = nestedReply.userId?._id || nestedReply.userId;
+    
+    if (ownerId.toString() !== userId.toString() && 
+        commentUserId.toString() !== userId.toString() && 
+        parentReplyUserId.toString() !== userId.toString() &&
+        nestedReplyUserId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to delete this nested reply' });
+    }
+
+    nestedReply.deleteOne();
+    await challenge.save();
+
+    res.json({ message: 'Nested reply deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting nested reply', error: error.message });
   }
 });
 

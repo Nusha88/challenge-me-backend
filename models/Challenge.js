@@ -91,6 +91,77 @@ const challengeSchema = new mongoose.Schema(
           default: []
         }
       }
+    ],
+    allowComments: {
+      type: Boolean,
+      default: true
+    },
+    comments: [
+      {
+        userId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true
+        },
+        text: {
+          type: String,
+          required: true,
+          trim: true,
+          maxlength: 1000
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now
+        },
+        replies: [
+          {
+            userId: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: 'User',
+              required: true
+            },
+            text: {
+              type: String,
+              required: true,
+              trim: true,
+              maxlength: 1000
+            },
+            mentionedUserId: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: 'User',
+              default: null
+            },
+            createdAt: {
+              type: Date,
+              default: Date.now
+            },
+            replies: [
+              {
+                userId: {
+                  type: mongoose.Schema.Types.ObjectId,
+                  ref: 'User',
+                  required: true
+                },
+                text: {
+                  type: String,
+                  required: true,
+                  trim: true,
+                  maxlength: 1000
+                },
+                mentionedUserId: {
+                  type: mongoose.Schema.Types.ObjectId,
+                  ref: 'User',
+                  default: null
+                },
+                createdAt: {
+                  type: Date,
+                  default: Date.now
+                }
+              }
+            ]
+          }
+        ]
+      }
     ]
   },
   {

@@ -32,6 +32,11 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     sparse: true, // Allows multiple null values but enforces uniqueness for non-null values
     unique: true
   },
+  watchedChallenges: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'Challenge',
+    default: []
+  },
   createdAt: {
     type: Date,
     default: Date.now
