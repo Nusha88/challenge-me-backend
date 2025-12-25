@@ -34,7 +34,7 @@ const challengeSchema = new mongoose.Schema(
       validate: {
         validator: function(v) {
           // Allow null/undefined for result challenges, or valid enum values for habit challenges
-          return v === null || v === undefined || v === '' || ['daily', 'everyOtherDay', 'weekdays'].includes(v);
+          return v === null || v === undefined || v === '' || ['daily', 'everyOtherDay'].includes(v);
         },
         message: '{VALUE} is not a valid frequency'
       }
