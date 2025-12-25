@@ -16,25 +16,21 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     unique: true,
     match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email address']
   },
-  age: {
-    type: Number,
-    required: true,
-    min: 12,
-    max: 99
-  },
-  country: {
-    type: String,
-    required: true,
-    trim: true
-  },
   avatarUrl: {
     type: String,
     default: ''
   },
   password: {
     type: String,
-    required: true,
+    required: function() {
+      return !this.googleId; // Password required only if not using Google OAuth
+    },
     minlength: 6
+  },
+  googleId: {
+    type: String,
+    sparse: true, // Allows multiple null values but enforces uniqueness for non-null values
+    unique: true
   },
   createdAt: {
     type: Date,

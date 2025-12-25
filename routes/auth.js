@@ -1,10 +1,79 @@
 const express = require('express');
 const router = express.Router();
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+
+// Configure Passport Google Strategy
+passport.use(new GoogleStrategy({
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackURL: process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback'
+}, async (accessToken, refreshToken, profile, done) => {
+  try {
+    // Check if user already exists with this Google ID
+    let user = await User.findOne({ googleId: profile.id });
+    
+    if (user) {
+      return done(null, user);
+    }
+    
+    // Check if user exists with this email (for linking accounts)
+    user = await User.findOne({ email: profile.emails[0].value.toLowerCase() });
+    
+    if (user) {
+      // Link Google account to existing user
+      user.googleId = profile.id;
+      if (!user.avatarUrl && profile.photos && profile.photos[0]) {
+        user.avatarUrl = profile.photos[0].value;
+      }
+      await user.save();
+      return done(null, user);
+    }
+    
+    // Create new user
+    // Generate a unique name if the display name is taken
+    let name = profile.displayName || profile.emails[0].value.split('@')[0];
+    let nameExists = await User.findOne({ name });
+    let counter = 1;
+    let uniqueName = name;
+    while (nameExists) {
+      uniqueName = `${name}${counter}`;
+      nameExists = await User.findOne({ name: uniqueName });
+      counter++;
+    }
+    
+    user = new User({
+      name: uniqueName,
+      email: profile.emails[0].value.toLowerCase(),
+      googleId: profile.id,
+      avatarUrl: profile.photos && profile.photos[0] ? profile.photos[0].value : '',
+      password: '' // Empty password for Google OAuth users
+    });
+    
+    await user.save();
+    return done(null, user);
+  } catch (error) {
+    return done(error, null);
+  }
+}));
+
+passport.serializeUser((user, done) => {
+  done(null, user._id);
+});
+
+passport.deserializeUser(async (id, done) => {
+  try {
+    const user = await User.findById(id);
+    done(null, user);
+  } catch (error) {
+    done(error, null);
+  }
+});
 
 // JWT middleware (for future use)
 function authenticateToken(req, res, next) {
@@ -32,8 +101,6 @@ router.get('/users', async (req, res) => {
     const users = await User.find({}, {
       name: 1,
       email: 1,
-      age: 1,
-      country: 1,
       createdAt: 1,
       _id: 1
     }).sort({ createdAt: -1 });
@@ -55,8 +122,8 @@ router.get('/users', async (req, res) => {
 // Register a new user
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, age, country, password } = req.body;
-    if (!name || !email || age === undefined || age === null || !country || !password) {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
       return res.status(400).json({
         message: 'All fields are required'
       });
@@ -65,17 +132,6 @@ router.post('/register', async (req, res) => {
     if (!emailRegex.test(email.trim())) {
       return res.status(400).json({
         message: 'Invalid email format'
-      });
-    }
-    const ageNumber = Number(age);
-    if (!Number.isInteger(ageNumber)) {
-      return res.status(400).json({
-        message: 'Age must be a whole number'
-      });
-    }
-    if (ageNumber < 12 || ageNumber > 99) {
-      return res.status(400).json({
-        message: 'Age must be between 12 and 99'
       });
     }
     if (typeof password !== 'string' || password.length < 6) {
@@ -97,8 +153,6 @@ router.post('/register', async (req, res) => {
     const user = new User({
       name,
       email: email.trim().toLowerCase(),
-      age: ageNumber,
-      country,
       avatarUrl: req.body.avatarUrl || '',
       password: hashedPassword
     });
@@ -112,8 +166,6 @@ router.post('/register', async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
-        age: user.age,
-        country: user.country,
         avatarUrl: user.avatarUrl,
         createdAt: user.createdAt
       }
@@ -139,8 +191,12 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid email format' });
     }
     const user = await User.findOne({ email: email.trim().toLowerCase() });
-    if (!user || !user.password) {
+    if (!user) {
       return res.status(401).json({ message: 'Invalid email or password' });
+    }
+    // Check if user is using Google OAuth (no password)
+    if (!user.password) {
+      return res.status(401).json({ message: 'This account uses Google sign-in. Please sign in with Google.' });
     }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
@@ -155,8 +211,6 @@ router.post('/login', async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
-        age: user.age,
-        country: user.country,
         avatarUrl: user.avatarUrl,
         createdAt: user.createdAt
       }
@@ -173,8 +227,6 @@ router.get('/profile', authenticateToken, async (req, res) => {
     const user = await User.findById(req.user.id, {
       name: 1,
       email: 1,
-      age: 1,
-      country: 1,
       avatarUrl: 1,
       createdAt: 1,
       _id: 1
@@ -192,7 +244,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
 router.put('/profile', authenticateToken, async (req, res) => {
   try {
     const updates = {};
-    const { name, email, age, country, avatarUrl } = req.body;
+    const { name, email, avatarUrl } = req.body;
 
     if (name !== undefined) {
       if (!name || typeof name !== 'string' || !name.trim()) {
@@ -215,21 +267,6 @@ router.put('/profile', authenticateToken, async (req, res) => {
       updates.email = normalizedEmail;
     }
 
-    if (age !== undefined) {
-      const ageNumber = Number(age);
-      if (!Number.isInteger(ageNumber) || ageNumber < 12 || ageNumber > 99) {
-        return res.status(400).json({ message: 'Age must be an integer between 12 and 99' });
-      }
-      updates.age = ageNumber;
-    }
-
-    if (country !== undefined) {
-      if (typeof country !== 'string' || country.length !== 2) {
-        return res.status(400).json({ message: 'Country must be a two-letter code' });
-      }
-      updates.country = country.toUpperCase();
-    }
-
     if (avatarUrl !== undefined) {
       if (avatarUrl && typeof avatarUrl !== 'string') {
         return res.status(400).json({ message: 'Avatar URL must be a string' });
@@ -244,7 +281,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.user.id,
       { $set: updates },
-      { new: true, select: 'name email age country avatarUrl createdAt _id' }
+      { new: true, select: 'name email avatarUrl createdAt _id' }
     );
 
     if (!user) {
@@ -260,5 +297,35 @@ router.put('/profile', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Error updating profile', error: error.message });
   }
 });
+
+// Google OAuth routes
+router.get('/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+router.get('/google/callback',
+  passport.authenticate('google', { session: false, failureRedirect: '/login' }),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      // Generate JWT
+      const token = jwt.sign({ id: user._id, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
+      
+      // Redirect to frontend with token
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      res.redirect(`${frontendUrl}/auth/google/callback?token=${token}&user=${encodeURIComponent(JSON.stringify({
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+        createdAt: user.createdAt
+      }))}`);
+    } catch (error) {
+      console.error('Google OAuth callback error:', error);
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      res.redirect(`${frontendUrl}/login?error=oauth_failed`);
+    }
+  }
+);
 
 module.exports = router; 
