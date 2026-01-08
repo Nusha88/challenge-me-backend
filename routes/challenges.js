@@ -177,7 +177,67 @@ router.post('/:id/join', async (req, res) => {
 // Get all challenges
 router.get('/', async (req, res) => {
   try {
-    const challenges = await Challenge.find({})
+    const { excludeFinished } = req.query;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    let query = {};
+    
+    // If excludeFinished is true, filter out finished challenges
+    if (excludeFinished === 'true') {
+      // Get all challenges first
+      const allChallenges = await Challenge.find({})
+        .sort({ createdAt: -1 })
+        .populate('owner', 'name avatarUrl')
+        .populate('participants.userId', 'name avatarUrl');
+      
+      // Filter out finished challenges
+      const activeChallenges = allChallenges.filter(challenge => {
+        // Check if endDate is in the past
+        if (challenge.endDate) {
+          try {
+            const endDate = new Date(challenge.endDate);
+            endDate.setHours(0, 0, 0, 0);
+            if (endDate < today) {
+              return false; // Exclude if endDate is in past
+            }
+          } catch (e) {
+            // Continue if date parsing fails
+          }
+        }
+        
+        // For result challenges, check if all actions are done
+        if (challenge.challengeType === 'result') {
+          if (!challenge.actions || !Array.isArray(challenge.actions) || challenge.actions.length === 0) {
+            return true; // Include if no actions
+          }
+          
+          // Check if all actions and their children are checked
+          const allActionsDone = challenge.actions.every(action => {
+            // Parent action must be checked
+            if (!action.checked) return false;
+            
+            // All children must be checked (if any exist)
+            if (action.children && Array.isArray(action.children) && action.children.length > 0) {
+              return action.children.every(child => child.checked);
+            }
+            
+            return true;
+          });
+          
+          if (allActionsDone) {
+            return false; // Exclude if all actions are done
+          }
+        }
+        
+        return true; // Include the challenge
+      });
+      
+      return res.json({ challenges: activeChallenges });
+    }
+    
+    // Otherwise, return all challenges
+    const challenges = await Challenge.find(query)
       .sort({ createdAt: -1 })
       .populate('owner', 'name avatarUrl')
       .populate('participants.userId', 'name avatarUrl');
