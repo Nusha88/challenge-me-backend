@@ -319,4 +319,102 @@ router.put('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// Get today's daily checklist
+router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const todayChecklist = user.dailyChecklists.find(checklist => {
+      const checklistDate = new Date(checklist.date);
+      checklistDate.setHours(0, 0, 0, 0);
+      return checklistDate.getTime() === today.getTime();
+    });
+
+    if (todayChecklist) {
+      res.json({ checklist: todayChecklist });
+    } else {
+      res.json({ checklist: null });
+    }
+  } catch (error) {
+    console.error('Error fetching today\'s checklist:', error);
+    res.status(500).json({ message: 'Error fetching checklist', error: error.message });
+  }
+});
+
+// Update today's daily checklist
+router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
+  try {
+    const { tasks } = req.body;
+    
+    if (!Array.isArray(tasks)) {
+      return res.status(400).json({ message: 'Tasks must be an array' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Find existing checklist for today
+    const checklistIndex = user.dailyChecklists.findIndex(checklist => {
+      const checklistDate = new Date(checklist.date);
+      checklistDate.setHours(0, 0, 0, 0);
+      return checklistDate.getTime() === today.getTime();
+    });
+
+    if (checklistIndex !== -1) {
+      // Update existing checklist
+      user.dailyChecklists[checklistIndex].tasks = tasks;
+    } else {
+      // Create new checklist for today
+      user.dailyChecklists.push({
+        date: today,
+        tasks: tasks
+      });
+    }
+
+    await user.save();
+
+    const updatedChecklist = user.dailyChecklists[checklistIndex !== -1 ? checklistIndex : user.dailyChecklists.length - 1];
+    res.json({ 
+      message: 'Checklist updated successfully',
+      checklist: updatedChecklist 
+    });
+  } catch (error) {
+    console.error('Error updating checklist:', error);
+    res.status(500).json({ message: 'Error updating checklist', error: error.message });
+  }
+});
+
+// Get all daily checklists (history)
+router.get('/daily-checklist/history', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id, 'dailyChecklists');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Sort by date descending (newest first)
+    const sortedChecklists = user.dailyChecklists.sort((a, b) => {
+      return new Date(b.date) - new Date(a.date);
+    });
+
+    res.json({ checklists: sortedChecklists });
+  } catch (error) {
+    console.error('Error fetching checklist history:', error);
+    res.status(500).json({ message: 'Error fetching checklist history', error: error.message });
+  }
+});
+
 module.exports = router; 

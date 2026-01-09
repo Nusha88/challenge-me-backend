@@ -38,6 +38,22 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: Date,
     default: null
   },
+  dailyChecklists: [{
+    date: {
+      type: Date,
+      required: true
+    },
+    tasks: [{
+      title: {
+        type: String,
+        required: true
+  },
+      done: {
+        type: Boolean,
+        default: false
+      }
+    }]
+  }],
   createdAt: {
     type: Date,
     default: Date.now
