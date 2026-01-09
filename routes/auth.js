@@ -298,6 +298,40 @@ router.put('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// Generic callback route
+router.get('/callback', async (req, res) => {
+  try {
+    const { token, error, code } = req.query;
+    
+    // Handle OAuth error
+    if (error) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(error)}`);
+    }
+    
+    // If token is provided directly, redirect to frontend with token
+    if (token) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
+    }
+    
+    // Handle OAuth code exchange (if needed for future providers)
+    if (code) {
+      // This can be extended for other OAuth providers
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/login?error=oauth_code_exchange_not_implemented`);
+    }
+    
+    // Default: redirect to login
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    res.redirect(`${frontendUrl}/login?error=invalid_callback`);
+  } catch (error) {
+    console.error('Callback error:', error);
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    res.redirect(`${frontendUrl}/login?error=callback_failed`);
+  }
+});
+
 // Google OAuth routes
 router.get('/google',
   passport.authenticate('google', { scope: ['profile', 'email'] })
