@@ -289,17 +289,47 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
 router.get('/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    const { excludePrivate } = req.query;
+    
+    // Try to get authenticated user ID if token is provided (optional authentication)
+    let requestingUserId = null;
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      const token = authHeader.split(' ')[1];
+      if (token) {
+        try {
+          const jwt = require('jsonwebtoken');
+          const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+          const decoded = jwt.verify(token, JWT_SECRET);
+          requestingUserId = decoded.id;
+        } catch (err) {
+          // Token invalid or expired, continue without authentication
+        }
+      }
+    }
 
     if (!userId) {
       return res.status(400).json({ message: 'User ID is required' });
     }
 
-    const challenges = await Challenge.find({
+    // Build query
+    const query = {
       $or: [
         { owner: userId }, 
         { 'participants.userId': userId }
       ]
-    })
+    };
+
+    // Exclude private challenges if:
+    // 1. excludePrivate query param is true (as string 'true' or boolean true), OR
+    // 2. The requesting user is not viewing their own profile (or no token provided)
+    const isOwnProfile = requestingUserId && requestingUserId.toString() === userId.toString();
+    const shouldExcludePrivate = excludePrivate === 'true' || excludePrivate === true || !isOwnProfile;
+    if (shouldExcludePrivate) {
+      query.privacy = { $ne: 'private' };
+    }
+
+    const challenges = await Challenge.find(query)
       .sort({ createdAt: -1 })
       .populate('owner', 'name avatarUrl')
       .populate('participants.userId', 'name avatarUrl');

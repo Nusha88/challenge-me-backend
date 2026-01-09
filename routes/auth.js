@@ -30,16 +30,34 @@ router.get('/users', async (req, res) => {
         error: 'User model not found'
       });
     }
+    const Challenge = require('../models/Challenge');
     const users = await User.find({}, {
       name: 1,
       email: 1,
+      avatarUrl: 1,
       createdAt: 1,
       _id: 1
     }).sort({ createdAt: -1 });
-    console.log(`Successfully fetched ${users.length} users`);
+    
+    // Get challenge counts for each user (excluding private challenges)
+    const usersWithCounts = await Promise.all(users.map(async (user) => {
+      const challengeCount = await Challenge.countDocuments({
+        $or: [
+          { owner: user._id },
+          { 'participants.userId': user._id }
+        ],
+        privacy: { $ne: 'private' } // Exclude private challenges
+      });
+      return {
+        ...user.toObject(),
+        challengeCount
+      };
+    }));
+    
+    console.log(`Successfully fetched ${usersWithCounts.length} users`);
     res.json({
       message: 'Users retrieved successfully',
-      users
+      users: usersWithCounts
     });
   } catch (error) {
     console.error('Error in /users endpoint:', error);
