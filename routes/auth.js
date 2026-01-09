@@ -1,79 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const passport = require('passport');
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { sendPasswordResetEmail } = require('../utils/emailService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
-
-// Configure Passport Google Strategy
-passport.use(new GoogleStrategy({
-  clientID: process.env.CLIENT_ID,
-  clientSecret: process.env.CLIENT_SECRET,
-  callbackURL: process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback'
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
-    // Check if user already exists with this Google ID
-    let user = await User.findOne({ googleId: profile.id });
-    
-    if (user) {
-      return done(null, user);
-    }
-    
-    // Check if user exists with this email (for linking accounts)
-    user = await User.findOne({ email: profile.emails[0].value.toLowerCase() });
-    
-    if (user) {
-      // Link Google account to existing user
-      user.googleId = profile.id;
-      if (!user.avatarUrl && profile.photos && profile.photos[0]) {
-        user.avatarUrl = profile.photos[0].value;
-      }
-      await user.save();
-      return done(null, user);
-    }
-    
-    // Create new user
-    // Generate a unique name if the display name is taken
-    let name = profile.displayName || profile.emails[0].value.split('@')[0];
-    let nameExists = await User.findOne({ name });
-    let counter = 1;
-    let uniqueName = name;
-    while (nameExists) {
-      uniqueName = `${name}${counter}`;
-      nameExists = await User.findOne({ name: uniqueName });
-      counter++;
-    }
-    
-    user = new User({
-      name: uniqueName,
-      email: profile.emails[0].value.toLowerCase(),
-      googleId: profile.id,
-      avatarUrl: profile.photos && profile.photos[0] ? profile.photos[0].value : '',
-      password: '' // Empty password for Google OAuth users
-    });
-    
-    await user.save();
-    return done(null, user);
-  } catch (error) {
-    return done(error, null);
-  }
-}));
-
-passport.serializeUser((user, done) => {
-  done(null, user._id);
-});
-
-passport.deserializeUser(async (id, done) => {
-  try {
-    const user = await User.findById(id);
-    done(null, user);
-  } catch (error) {
-    done(error, null);
-  }
-});
 
 // JWT middleware (for future use)
 function authenticateToken(req, res, next) {
@@ -194,9 +126,8 @@ router.post('/login', async (req, res) => {
     if (!user) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
-    // Check if user is using Google OAuth (no password)
     if (!user.password) {
-      return res.status(401).json({ message: 'This account uses Google sign-in. Please sign in with Google.' });
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
@@ -237,6 +168,77 @@ router.get('/profile', authenticateToken, async (req, res) => {
     res.json({ user });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching profile', error: error.message });
+  }
+});
+
+// Forgot password endpoint
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ message: 'Invalid email format' });
+    }
+    const user = await User.findOne({ email: email.trim().toLowerCase() });
+    if (!user) {
+      // Don't reveal if user exists or not for security
+      return res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
+    }
+    // Generate reset token
+    const crypto = require('crypto');
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpiry = Date.now() + 3600000; // 1 hour from now
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = new Date(resetTokenExpiry);
+    await user.save();
+    
+    // Send password reset email
+    try {
+      await sendPasswordResetEmail(user.email, resetToken, user.name);
+      console.log(`Password reset email sent to ${user.email}`);
+    } catch (emailError) {
+      console.error('Failed to send password reset email:', emailError);
+      // Still return success to user for security (don't reveal if email failed)
+      // The token is still saved, so they can request again if needed
+    }
+    
+    res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ message: 'Error processing forgot password request', error: error.message });
+  }
+});
+
+// Reset password endpoint
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) {
+      return res.status(400).json({ message: 'Token and password are required' });
+    }
+    if (typeof password !== 'string' || password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired reset token' });
+    }
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(password, 10);
+    user.password = hashedPassword;
+    user.resetPasswordToken = null;
+    user.resetPasswordExpires = null;
+    await user.save();
+    res.json({ message: 'Password has been reset successfully' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ message: 'Error resetting password', error: error.message });
   }
 });
 
@@ -297,69 +299,5 @@ router.put('/profile', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Error updating profile', error: error.message });
   }
 });
-
-// Generic callback route
-router.get('/callback', async (req, res) => {
-  try {
-    const { token, error, code } = req.query;
-    
-    // Handle OAuth error
-    if (error) {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      return res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(error)}`);
-    }
-    
-    // If token is provided directly, redirect to frontend with token
-    if (token) {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      return res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
-    }
-    
-    // Handle OAuth code exchange (if needed for future providers)
-    if (code) {
-      // This can be extended for other OAuth providers
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      return res.redirect(`${frontendUrl}/login?error=oauth_code_exchange_not_implemented`);
-    }
-    
-    // Default: redirect to login
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    res.redirect(`${frontendUrl}/login?error=invalid_callback`);
-  } catch (error) {
-    console.error('Callback error:', error);
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    res.redirect(`${frontendUrl}/login?error=callback_failed`);
-  }
-});
-
-// Google OAuth routes
-router.get('/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
-
-router.get('/google/callback',
-  passport.authenticate('google', { session: false, failureRedirect: '/login' }),
-  async (req, res) => {
-    try {
-      const user = req.user;
-      // Generate JWT
-      const token = jwt.sign({ id: user._id, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
-      
-      // Redirect to frontend with token
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      res.redirect(`${frontendUrl}/auth/google/callback?token=${token}&user=${encodeURIComponent(JSON.stringify({
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        avatarUrl: user.avatarUrl,
-        createdAt: user.createdAt
-      }))}`);
-    } catch (error) {
-      console.error('Google OAuth callback error:', error);
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      res.redirect(`${frontendUrl}/login?error=oauth_failed`);
-    }
-  }
-);
 
 module.exports = router; 

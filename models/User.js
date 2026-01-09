@@ -22,20 +22,21 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
   },
   password: {
     type: String,
-    required: function() {
-      return !this.googleId; // Password required only if not using Google OAuth
-    },
+    required: true,
     minlength: 6
-  },
-  googleId: {
-    type: String,
-    sparse: true, // Allows multiple null values but enforces uniqueness for non-null values
-    unique: true
   },
   watchedChallenges: {
     type: [mongoose.Schema.Types.ObjectId],
     ref: 'Challenge',
     default: []
+  },
+  resetPasswordToken: {
+    type: String,
+    default: null
+  },
+  resetPasswordExpires: {
+    type: Date,
+    default: null
   },
   createdAt: {
     type: Date,
