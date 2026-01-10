@@ -3,7 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const { getVapidPublicKey } = require('../utils/pushService');
 
-// Middleware to authenticate token
+// Middleware to authenticate token - use the same as auth routes
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -13,10 +13,12 @@ const authenticateToken = (req, res, next) => {
   }
 
   const jwt = require('jsonwebtoken');
-  const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+  // Use the same JWT_SECRET as auth routes
+  const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
+      console.error('[Push] Token verification failed:', err.message);
       return res.status(403).json({ message: 'Invalid or expired token' });
     }
     req.user = user;
@@ -38,13 +40,18 @@ router.get('/vapid-public-key', (req, res) => {
 router.post('/subscribe', authenticateToken, async (req, res) => {
   try {
     const { subscription } = req.body;
+    const userId = req.user.id;
+    
+    console.log(`[Push] Subscription request received for user ${userId}`);
     
     if (!subscription || !subscription.endpoint || !subscription.keys) {
+      console.log(`[Push] Invalid subscription object for user ${userId}`);
       return res.status(400).json({ message: 'Invalid subscription object' });
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(userId);
     if (!user) {
+      console.log(`[Push] User ${userId} not found`);
       return res.status(404).json({ message: 'User not found' });
     }
 
