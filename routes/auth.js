@@ -327,16 +327,24 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    // Normalize today's date to UTC midnight for consistent comparison across timezones
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    today.setUTCHours(0, 0, 0, 0);
+    today.setUTCMilliseconds(0);
+    
     const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
 
-    const todayChecklist = user.dailyChecklists.find(checklist => {
+    // Find checklist for today (handle multiple if they exist due to previous bugs)
+    const todayChecklists = user.dailyChecklists.filter(checklist => {
       const checklistDate = new Date(checklist.date);
-      checklistDate.setHours(0, 0, 0, 0);
-      return checklistDate.getTime() === today.getTime();
+      checklistDate.setUTCHours(0, 0, 0, 0);
+      checklistDate.setUTCMilliseconds(0);
+      return checklistDate.getTime() >= today.getTime() && checklistDate.getTime() < tomorrow.getTime();
     });
+
+    // Return the most recent one if multiple exist (shouldn't happen after fix, but handle gracefully)
+    const todayChecklist = todayChecklists.length > 0 ? todayChecklists[todayChecklists.length - 1] : null;
 
     if (todayChecklist) {
       res.json({ checklist: todayChecklist });
@@ -351,7 +359,7 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
 
 // Update today's daily checklist
 router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
-    try {
+  try {
     const { tasks } = req.body;
     
     if (!Array.isArray(tasks)) {
@@ -363,35 +371,58 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    // Normalize today's date to UTC midnight for consistent comparison across timezones
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    today.setUTCHours(0, 0, 0, 0);
+    today.setUTCMilliseconds(0);
+    
+    const tomorrow = new Date(today);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
 
-    // Find existing checklist for today
-    const checklistIndex = user.dailyChecklists.findIndex(checklist => {
+    // First, remove any duplicate checklists for today (cleanup)
+    // This handles cases where multiple checklists were created due to timezone issues
+    await User.updateOne(
+      { _id: req.user.id },
+      {
+        $pull: {
+          dailyChecklists: {
+            date: {
+              $gte: today,
+              $lt: tomorrow
+            }
+          }
+        }
+      }
+    );
+
+    // Now add/update the checklist atomically
+    // This ensures only one checklist exists for today
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      {
+        $push: {
+          dailyChecklists: {
+            date: today,
+            tasks: tasks
+          }
+        }
+      },
+      { new: true }
+    );
+
+    // Find and return the checklist we just created
+    const updatedChecklist = updatedUser.dailyChecklists.find(checklist => {
       const checklistDate = new Date(checklist.date);
-      checklistDate.setHours(0, 0, 0, 0);
+      checklistDate.setUTCHours(0, 0, 0, 0);
+      checklistDate.setUTCMilliseconds(0);
       return checklistDate.getTime() === today.getTime();
     });
 
-    if (checklistIndex !== -1) {
-      // Update existing checklist
-      user.dailyChecklists[checklistIndex].tasks = tasks;
-    } else {
-      // Create new checklist for today
-      user.dailyChecklists.push({
-        date: today,
-        tasks: tasks
-      });
-    }
-
-    await user.save();
-
-    const updatedChecklist = user.dailyChecklists[checklistIndex !== -1 ? checklistIndex : user.dailyChecklists.length - 1];
     res.json({ 
       message: 'Checklist updated successfully',
       checklist: updatedChecklist 
     });
-    } catch (error) {
+  } catch (error) {
     console.error('Error updating checklist:', error);
     res.status(500).json({ message: 'Error updating checklist', error: error.message });
   }
