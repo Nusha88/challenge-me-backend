@@ -91,4 +91,23 @@ router.post('/unsubscribe', authenticateToken, async (req, res) => {
   }
 });
 
+// Get push subscription status for the current user
+router.get('/status', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    console.log(`[Push] Status request received for user ${userId}`);
+    const user = await User.findById(userId, 'pushSubscription');
+    if (!user) {
+      console.log(`[Push] User ${userId} not found for status check`);
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const hasSubscription = !!user.pushSubscription;
+    console.log(`[Push] User ${userId} has subscription: ${hasSubscription}`);
+    res.json({ hasSubscription });
+  } catch (error) {
+    console.error(`[Push] Error checking push subscription status:`, error);
+    res.status(500).json({ message: 'Error checking push subscription status', error: error.message });
+  }
+});
+
 module.exports = router;
