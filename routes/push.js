@@ -57,6 +57,12 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    // Log the VAPID public key being used (for debugging)
+    const { getVapidPublicKey } = require('../utils/pushService');
+    const currentVapidKey = getVapidPublicKey();
+    console.log(`[Push] Current VAPID public key on server: ${currentVapidKey.substring(0, 20)}...`);
+    console.log(`[Push] Subscription endpoint: ${subscription.endpoint.substring(0, 50)}...`);
+
     // Store push subscription
     user.pushSubscription = {
       endpoint: subscription.endpoint,
@@ -67,10 +73,11 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
     };
 
     await user.save();
+    console.log(`[Push] Subscription saved successfully for user ${userId}`);
 
     res.json({ message: 'Push subscription saved successfully' });
   } catch (error) {
-    console.error('Error saving push subscription:', error);
+    console.error('[Push] Error saving push subscription:', error);
     res.status(500).json({ message: 'Error saving push subscription', error: error.message });
   }
 });
