@@ -30,8 +30,10 @@ const authenticateToken = (req, res, next) => {
 router.get('/vapid-public-key', (req, res) => {
   try {
     const publicKey = getVapidPublicKey();
+    console.log('[Push] VAPID public key requested, returning:', publicKey.substring(0, 20) + '...');
     res.json({ publicKey });
   } catch (error) {
+    console.error('[Push] Error getting VAPID public key:', error);
     res.status(500).json({ message: 'Error getting VAPID key', error: error.message });
   }
 });

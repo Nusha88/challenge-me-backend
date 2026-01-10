@@ -25,6 +25,10 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
     VAPID_KEYS.publicKey,
     VAPID_KEYS.privateKey
   );
+  console.log('[Push Service] VAPID keys configured successfully');
+  console.log('[Push Service] Public key:', VAPID_PUBLIC_KEY.substring(0, 20) + '...');
+} else {
+  console.warn('[Push Service] VAPID keys are missing - push notifications will not work');
 }
 
 /**
@@ -37,16 +41,28 @@ async function sendPushNotification(userId, notificationData) {
   try {
     // Check if VAPID keys are configured
     if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-      console.log('VAPID keys not configured, skipping push notification');
+      console.log('[Push] VAPID keys not configured, skipping push notification');
       return;
+    }
+
+    // Verify VAPID keys are set in webpush
+    if (!webpush.getVapidKeys()) {
+      console.log('[Push] VAPID keys not set in webpush, re-setting...');
+      webpush.setVapidDetails(
+        VAPID_CONTACT_EMAIL,
+        VAPID_PUBLIC_KEY,
+        VAPID_PRIVATE_KEY
+      );
     }
 
     const user = await User.findById(userId);
     
     if (!user || !user.pushSubscription) {
-      console.log(`No push subscription found for user ${userId}`);
+      console.log(`[Push] No push subscription found for user ${userId}`);
       return;
     }
+
+    console.log(`[Push] Sending notification to user ${userId} with endpoint: ${user.pushSubscription.endpoint?.substring(0, 50)}...`);
 
     const payload = JSON.stringify({
       title: notificationData.title,
@@ -60,17 +76,18 @@ async function sendPushNotification(userId, notificationData) {
     });
 
     await webpush.sendNotification(user.pushSubscription, payload);
-    console.log(`Push notification sent to user ${userId}`);
+    console.log(`[Push] Push notification sent successfully to user ${userId}`);
   } catch (error) {
-    console.error(`Error sending push notification to user ${userId}:`, error);
+    console.error(`[Push] Error sending push notification to user ${userId}:`, error);
     
     // If subscription is invalid or VAPID keys don't match, remove it
     if (error.statusCode === 410 || error.statusCode === 404 || error.statusCode === 403) {
       if (error.statusCode === 403) {
         console.log(`[Push] VAPID key mismatch for user ${userId} - subscription was created with different keys`);
+        console.log(`[Push] Current VAPID public key: ${VAPID_PUBLIC_KEY?.substring(0, 20)}...`);
         console.log(`[Push] User needs to re-subscribe with the current VAPID keys`);
       }
-      console.log(`Removing invalid push subscription for user ${userId}`);
+      console.log(`[Push] Removing invalid push subscription for user ${userId}`);
       await User.findByIdAndUpdate(userId, { pushSubscription: null });
     }
   }
