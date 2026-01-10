@@ -169,13 +169,29 @@ router.post('/:id/join', async (req, res) => {
     const ownerId = challenge.owner?._id || challenge.owner;
     if (ownerId && ownerId.toString() !== userId.toString()) {
       const Notification = require('../models/Notification');
+      const { sendPushNotification } = require('../utils/pushService');
+      const User = require('../models/User');
+      
       try {
-        await Notification.create({
+        const notification = await Notification.create({
           userId: ownerId,
           type: 'join',
           challengeId: challenge._id,
           fromUserId: userId,
           read: false
+        });
+        
+        // Send push notification
+        const fromUser = await User.findById(userId, 'name');
+        await sendPushNotification(ownerId, {
+          title: 'New Participant',
+          body: `${fromUser?.name || 'Someone'} joined your challenge "${challenge.title}"`,
+          data: {
+            notificationId: notification._id.toString(),
+            challengeId: challenge._id.toString(),
+            type: 'join'
+          },
+          tag: `challenge-${challenge._id}`
         });
       } catch (notificationError) {
         // Log error but don't fail the join operation
@@ -428,13 +444,29 @@ router.post('/:id/watch', async (req, res) => {
     const ownerId = challenge.owner?._id || challenge.owner;
     if (ownerId && ownerId.toString() !== userId.toString()) {
       const Notification = require('../models/Notification');
+      const { sendPushNotification } = require('../utils/pushService');
+      const User = require('../models/User');
+      
       try {
-        await Notification.create({
+        const notification = await Notification.create({
           userId: ownerId,
           type: 'watch',
           challengeId: challenge._id,
           fromUserId: userId,
           read: false
+        });
+        
+        // Send push notification
+        const fromUser = await User.findById(userId, 'name');
+        await sendPushNotification(ownerId, {
+          title: 'New Follower',
+          body: `${fromUser?.name || 'Someone'} started watching your challenge "${challenge.title}"`,
+          data: {
+            notificationId: notification._id.toString(),
+            challengeId: challenge._id.toString(),
+            type: 'watch'
+          },
+          tag: `challenge-${challenge._id}`
         });
       } catch (notificationError) {
         // Log error but don't fail the watch operation
@@ -535,14 +567,30 @@ router.post('/:id/comments', async (req, res) => {
     const ownerId = challenge.owner?._id || challenge.owner;
     if (ownerId && ownerId.toString() !== userId.toString()) {
       const Notification = require('../models/Notification');
+      const { sendPushNotification } = require('../utils/pushService');
+      const User = require('../models/User');
+      
       try {
-        await Notification.create({
+        const notification = await Notification.create({
           userId: ownerId,
           type: 'comment',
           challengeId: challenge._id,
           commentId: newComment._id,
           fromUserId: userId,
           read: false
+        });
+        
+        // Send push notification
+        const fromUser = await User.findById(userId, 'name');
+        await sendPushNotification(ownerId, {
+          title: 'New Comment',
+          body: `${fromUser?.name || 'Someone'} commented on your challenge "${challenge.title}"`,
+          data: {
+            notificationId: notification._id.toString(),
+            challengeId: challenge._id.toString(),
+            type: 'comment'
+          },
+          tag: `challenge-${challenge._id}`
         });
       } catch (notificationError) {
         // Log error but don't fail the comment operation
@@ -775,13 +823,28 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) 
     if (mentionedUserId && mentionedUserId.toString() !== userId.toString()) {
       try {
         const Notification = require('../models/Notification');
-        await Notification.create({
+        const { sendPushNotification } = require('../utils/pushService');
+        
+        const notification = await Notification.create({
           userId: mentionedUserId,
           type: 'mention',
           challengeId: challenge._id,
           commentId: comment._id,
           replyId: newNestedReply._id,
           fromUserId: userId
+        });
+        
+        // Send push notification
+        const fromUser = await User.findById(userId, 'name');
+        await sendPushNotification(mentionedUserId, {
+          title: 'You were mentioned',
+          body: `${fromUser?.name || 'Someone'} mentioned you in a reply on "${challenge.title}"`,
+          data: {
+            notificationId: notification._id.toString(),
+            challengeId: challenge._id.toString(),
+            type: 'mention'
+          },
+          tag: `challenge-${challenge._id}`
         });
       } catch (notifError) {
         console.error('Error creating notification:', notifError);

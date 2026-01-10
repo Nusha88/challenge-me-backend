@@ -321,7 +321,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
 
 // Get today's daily checklist
 router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
-  try {
+    try {
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -363,7 +363,7 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
     } else {
       res.json({ checklist: null });
     }
-  } catch (error) {
+    } catch (error) {
     console.error('Error fetching today\'s checklist:', error);
     res.status(500).json({ message: 'Error fetching checklist', error: error.message });
   }

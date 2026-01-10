@@ -7,6 +7,7 @@ const path = require('path');
 const authRoutes = require('./routes/auth');
 const challengeRoutes = require('./routes/challenges');
 const notificationsRoutes = require('./routes/notifications');
+const pushRoutes = require('./routes/push');
 
 // Check for required environment variables
 if (!process.env.ATLAS_URI) {
@@ -94,6 +95,7 @@ app.get('/', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/challenges', challengeRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/push', pushRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

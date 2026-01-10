@@ -54,6 +54,16 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
       }
     }]
   }],
+  pushSubscription: {
+    type: {
+      endpoint: String,
+      keys: {
+        p256dh: String,
+        auth: String
+      }
+    },
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now
