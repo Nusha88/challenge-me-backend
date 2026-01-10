@@ -335,16 +335,28 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
     const tomorrow = new Date(today);
     tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
 
-    // Find checklist for today (handle multiple if they exist due to previous bugs)
+    // Find checklist for today - use a range to handle timezone differences
+    // Check if checklist date falls within today's UTC day (00:00:00 to 23:59:59)
     const todayChecklists = user.dailyChecklists.filter(checklist => {
+      if (!checklist.date) return false;
+      
       const checklistDate = new Date(checklist.date);
-      checklistDate.setUTCHours(0, 0, 0, 0);
-      checklistDate.setUTCMilliseconds(0);
-      return checklistDate.getTime() >= today.getTime() && checklistDate.getTime() < tomorrow.getTime();
+      // Normalize to UTC midnight for comparison
+      const normalizedDate = new Date(Date.UTC(
+        checklistDate.getUTCFullYear(),
+        checklistDate.getUTCMonth(),
+        checklistDate.getUTCDate(),
+        0, 0, 0, 0
+      ));
+      
+      // Compare normalized dates
+      return normalizedDate.getTime() === today.getTime();
     });
 
     // Return the most recent one if multiple exist (shouldn't happen after fix, but handle gracefully)
-    const todayChecklist = todayChecklists.length > 0 ? todayChecklists[todayChecklists.length - 1] : null;
+    const todayChecklist = todayChecklists.length > 0 
+      ? todayChecklists.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
+      : null;
 
     if (todayChecklist) {
       res.json({ checklist: todayChecklist });
@@ -379,43 +391,43 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     const tomorrow = new Date(today);
     tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
 
-    // First, remove any duplicate checklists for today (cleanup)
-    // This handles cases where multiple checklists were created due to timezone issues
-    await User.updateOne(
-      { _id: req.user.id },
-      {
-        $pull: {
-          dailyChecklists: {
-            date: {
-              $gte: today,
-              $lt: tomorrow
-            }
-          }
-        }
-      }
-    );
+    // Remove any duplicate checklists for today (cleanup)
+    // Filter in JavaScript to ensure consistent date comparison
+    const checklistsToKeep = user.dailyChecklists.filter(checklist => {
+      if (!checklist.date) return true;
+      const checklistDate = new Date(checklist.date);
+      // Normalize to UTC midnight using Date.UTC for consistent comparison
+      const normalizedChecklistDate = new Date(Date.UTC(
+        checklistDate.getUTCFullYear(),
+        checklistDate.getUTCMonth(),
+        checklistDate.getUTCDate(),
+        0, 0, 0, 0
+      ));
+      return normalizedChecklistDate.getTime() !== today.getTime();
+    });
 
-    // Now add/update the checklist atomically
-    // This ensures only one checklist exists for today
-    const updatedUser = await User.findByIdAndUpdate(
-      req.user.id,
-      {
-        $push: {
-          dailyChecklists: {
-            date: today,
-            tasks: tasks
-          }
-        }
-      },
-      { new: true }
-    );
+    // Add today's checklist
+    checklistsToKeep.push({
+      date: today,
+      tasks: tasks
+    });
+
+    // Update user with the cleaned list
+    user.dailyChecklists = checklistsToKeep;
+    const updatedUser = await user.save();
 
     // Find and return the checklist we just created
     const updatedChecklist = updatedUser.dailyChecklists.find(checklist => {
+      if (!checklist.date) return false;
       const checklistDate = new Date(checklist.date);
-      checklistDate.setUTCHours(0, 0, 0, 0);
-      checklistDate.setUTCMilliseconds(0);
-      return checklistDate.getTime() === today.getTime();
+      // Normalize to UTC midnight using Date.UTC for consistent comparison
+      const normalizedChecklistDate = new Date(Date.UTC(
+        checklistDate.getUTCFullYear(),
+        checklistDate.getUTCMonth(),
+        checklistDate.getUTCDate(),
+        0, 0, 0, 0
+      ));
+      return normalizedChecklistDate.getTime() === today.getTime();
     });
 
     res.json({ 
