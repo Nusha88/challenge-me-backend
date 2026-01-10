@@ -64,8 +64,12 @@ async function sendPushNotification(userId, notificationData) {
   } catch (error) {
     console.error(`Error sending push notification to user ${userId}:`, error);
     
-    // If subscription is invalid, remove it
-    if (error.statusCode === 410 || error.statusCode === 404) {
+    // If subscription is invalid or VAPID keys don't match, remove it
+    if (error.statusCode === 410 || error.statusCode === 404 || error.statusCode === 403) {
+      if (error.statusCode === 403) {
+        console.log(`[Push] VAPID key mismatch for user ${userId} - subscription was created with different keys`);
+        console.log(`[Push] User needs to re-subscribe with the current VAPID keys`);
+      }
       console.log(`Removing invalid push subscription for user ${userId}`);
       await User.findByIdAndUpdate(userId, { pushSubscription: null });
     }
