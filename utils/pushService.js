@@ -45,15 +45,7 @@ async function sendPushNotification(userId, notificationData) {
       return;
     }
 
-    // Verify VAPID keys are set in webpush
-    if (!webpush.getVapidKeys()) {
-      console.log('[Push] VAPID keys not set in webpush, re-setting...');
-      webpush.setVapidDetails(
-        VAPID_CONTACT_EMAIL,
-        VAPID_PUBLIC_KEY,
-        VAPID_PRIVATE_KEY
-      );
-    }
+    // VAPID keys are already set at module load time, no need to check or re-set
 
     const user = await User.findById(userId);
     
