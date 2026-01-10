@@ -351,7 +351,7 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
 
 // Update today's daily checklist
 router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
-  try {
+    try {
     const { tasks } = req.body;
     
     if (!Array.isArray(tasks)) {
@@ -391,7 +391,7 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       message: 'Checklist updated successfully',
       checklist: updatedChecklist 
     });
-  } catch (error) {
+    } catch (error) {
     console.error('Error updating checklist:', error);
     res.status(500).json({ message: 'Error updating checklist', error: error.message });
   }
@@ -414,7 +414,7 @@ router.get('/daily-checklist/history', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error fetching checklist history:', error);
     res.status(500).json({ message: 'Error fetching checklist history', error: error.message });
-  }
+    }
 });
 
 module.exports = router; 

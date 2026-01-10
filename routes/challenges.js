@@ -165,6 +165,24 @@ router.post('/:id/join', async (req, res) => {
     challenge.participants.push({ userId, completedDays: [] });
     await challenge.save();
 
+    // Create notification for challenge owner if they are not the one joining
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (ownerId && ownerId.toString() !== userId.toString()) {
+      const Notification = require('../models/Notification');
+      try {
+        await Notification.create({
+          userId: ownerId,
+          type: 'join',
+          challengeId: challenge._id,
+          fromUserId: userId,
+          read: false
+        });
+      } catch (notificationError) {
+        // Log error but don't fail the join operation
+        console.error('Error creating join notification:', notificationError);
+      }
+    }
+
     res.json({
       message: 'Successfully joined the challenge',
       challenge
@@ -388,7 +406,7 @@ router.post('/:id/watch', async (req, res) => {
       return res.status(400).json({ message: 'User ID is required' });
     }
 
-    const challenge = await Challenge.findById(req.params.id);
+    const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
@@ -405,6 +423,24 @@ router.post('/:id/watch', async (req, res) => {
 
     user.watchedChallenges.push(challenge._id);
     await user.save();
+
+    // Create notification for challenge owner if they are not the one watching
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (ownerId && ownerId.toString() !== userId.toString()) {
+      const Notification = require('../models/Notification');
+      try {
+        await Notification.create({
+          userId: ownerId,
+          type: 'watch',
+          challengeId: challenge._id,
+          fromUserId: userId,
+          read: false
+        });
+      } catch (notificationError) {
+        // Log error but don't fail the watch operation
+        console.error('Error creating watch notification:', notificationError);
+      }
+    }
 
     res.json({ message: 'Challenge added to watch list', watchedChallenges: user.watchedChallenges });
   } catch (error) {
@@ -472,7 +508,7 @@ router.post('/:id/comments', async (req, res) => {
       return res.status(400).json({ message: 'User ID and comment text are required' });
     }
 
-    const challenge = await Challenge.findById(req.params.id);
+    const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
@@ -494,6 +530,26 @@ router.post('/:id/comments', async (req, res) => {
     await challenge.populate('comments.userId', 'name avatarUrl');
 
     const newComment = challenge.comments[challenge.comments.length - 1];
+    
+    // Create notification for challenge owner if they are not the one commenting
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (ownerId && ownerId.toString() !== userId.toString()) {
+      const Notification = require('../models/Notification');
+      try {
+        await Notification.create({
+          userId: ownerId,
+          type: 'comment',
+          challengeId: challenge._id,
+          commentId: newComment._id,
+          fromUserId: userId,
+          read: false
+        });
+      } catch (notificationError) {
+        // Log error but don't fail the comment operation
+        console.error('Error creating comment notification:', notificationError);
+      }
+    }
+    
     res.status(201).json({ message: 'Comment added successfully', comment: newComment });
   } catch (error) {
     res.status(500).json({ message: 'Error adding comment', error: error.message });

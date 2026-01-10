@@ -10,7 +10,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['mention', 'comment', 'reply'],
+      enum: ['mention', 'comment', 'reply', 'join', 'watch'],
       required: true
     },
     challengeId: {
