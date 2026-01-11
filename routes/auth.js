@@ -22,7 +22,6 @@ function authenticateToken(req, res, next) {
 // Get all users
 router.get('/users', async (req, res) => {
   try {
-    console.log('Attempting to fetch users...');
     if (!User) {
       console.error('User model is not defined');
       return res.status(500).json({
@@ -31,7 +30,26 @@ router.get('/users', async (req, res) => {
       });
     }
     const Challenge = require('../models/Challenge');
-    const users = await User.find({}, {
+    
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 21;
+    const skip = (page - 1) * limit;
+    
+    // Search parameter
+    const searchQuery = req.query.search ? req.query.search.trim() : null;
+    
+    // Build query with optional search filter
+    const userQuery = {};
+    if (searchQuery) {
+      userQuery.name = { $regex: searchQuery, $options: 'i' }; // Case-insensitive search
+    }
+    
+    // Get total count for pagination (with search filter if applicable)
+    const totalUsers = await User.countDocuments(userQuery);
+    
+    // Fetch users with optional search filter, sorted by createdAt descending (we'll sort by challengeCount after getting counts)
+    const users = await User.find(userQuery, {
       name: 1,
       email: 1,
       avatarUrl: 1,
@@ -54,10 +72,26 @@ router.get('/users', async (req, res) => {
       };
     }));
     
-    console.log(`Successfully fetched ${usersWithCounts.length} users`);
+    // Sort by challengeCount descending
+    usersWithCounts.sort((a, b) => {
+      const countA = a.challengeCount || 0;
+      const countB = b.challengeCount || 0;
+      return countB - countA;
+    });
+    
+    // Apply pagination after sorting
+    const paginatedUsers = usersWithCounts.slice(skip, skip + limit);
+    const hasMore = skip + limit < usersWithCounts.length;
+    
     res.json({
       message: 'Users retrieved successfully',
-      users: usersWithCounts
+      users: paginatedUsers,
+      pagination: {
+        page,
+        limit,
+        total: totalUsers,
+        hasMore
+      }
     });
   } catch (error) {
     console.error('Error in /users endpoint:', error);

@@ -30,7 +30,6 @@ const authenticateToken = (req, res, next) => {
 router.get('/vapid-public-key', (req, res) => {
   try {
     const publicKey = getVapidPublicKey();
-    console.log('[Push] VAPID public key requested, returning:', publicKey.substring(0, 20) + '...');
     res.json({ publicKey });
   } catch (error) {
     console.error('[Push] Error getting VAPID public key:', error);
@@ -44,24 +43,14 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
     const { subscription } = req.body;
     const userId = req.user.id;
     
-    console.log(`[Push] Subscription request received for user ${userId}`);
-    
     if (!subscription || !subscription.endpoint || !subscription.keys) {
-      console.log(`[Push] Invalid subscription object for user ${userId}`);
       return res.status(400).json({ message: 'Invalid subscription object' });
     }
 
     const user = await User.findById(userId);
     if (!user) {
-      console.log(`[Push] User ${userId} not found`);
       return res.status(404).json({ message: 'User not found' });
     }
-
-    // Log the VAPID public key being used (for debugging)
-    const { getVapidPublicKey } = require('../utils/pushService');
-    const currentVapidKey = getVapidPublicKey();
-    console.log(`[Push] Current VAPID public key on server: ${currentVapidKey.substring(0, 20)}...`);
-    console.log(`[Push] Subscription endpoint: ${subscription.endpoint.substring(0, 50)}...`);
 
     // Store push subscription
     user.pushSubscription = {
@@ -73,7 +62,6 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
     };
 
     await user.save();
-    console.log(`[Push] Subscription saved successfully for user ${userId}`);
 
     res.json({ message: 'Push subscription saved successfully' });
   } catch (error) {
@@ -104,14 +92,11 @@ router.post('/unsubscribe', authenticateToken, async (req, res) => {
 router.get('/status', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    console.log(`[Push] Status request received for user ${userId}`);
     const user = await User.findById(userId, 'pushSubscription');
     if (!user) {
-      console.log(`[Push] User ${userId} not found for status check`);
       return res.status(404).json({ message: 'User not found' });
     }
     const hasSubscription = !!user.pushSubscription;
-    console.log(`[Push] User ${userId} has subscription: ${hasSubscription}`);
     res.json({ hasSubscription });
   } catch (error) {
     console.error(`[Push] Error checking push subscription status:`, error);

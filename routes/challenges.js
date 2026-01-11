@@ -208,25 +208,129 @@ router.post('/:id/join', async (req, res) => {
   }
 });
 
+// Leave challenge
+router.post('/:id/leave', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const challenge = await Challenge.findById(id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    // Check if user is a participant
+    const participantIndex = challenge.participants.findIndex(
+      p => (p.userId?._id || p.userId || p._id || p).toString() === userId.toString()
+    );
+
+    if (participantIndex === -1) {
+      return res.status(400).json({ message: 'You are not a participant of this challenge' });
+    }
+
+    // Remove participant
+    challenge.participants.splice(participantIndex, 1);
+    await challenge.save();
+
+    // Refresh challenge data
+    const updatedChallenge = await Challenge.findById(id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+
+    res.json({
+      message: 'Successfully left the challenge',
+      challenge: updatedChallenge
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error leaving challenge', error: error.message });
+  }
+});
+
 // Get all challenges
 router.get('/', async (req, res) => {
   try {
-    const { excludeFinished } = req.query;
+    const { excludeFinished, type, activity, participants, creationDate, page, limit, title, owner, popularity } = req.query;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
+    // Pagination parameters
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 20;
+    const skip = (pageNum - 1) * limitNum;
+    
     let query = {};
     
-    // If excludeFinished is true, filter out finished challenges
-    if (excludeFinished === 'true') {
-      // Get all challenges first
-      const allChallenges = await Challenge.find({})
-        .sort({ createdAt: -1 })
-        .populate('owner', 'name avatarUrl')
-        .populate('participants.userId', 'name avatarUrl');
-      
-      // Filter out finished challenges
-      const activeChallenges = allChallenges.filter(challenge => {
+    // Filter by type (challengeType)
+    if (type && (type === 'habit' || type === 'result')) {
+      query.challengeType = type;
+    }
+    
+    // Filter by title (search)
+    if (title && title.trim()) {
+      query.title = { $regex: title.trim(), $options: 'i' }; // Case-insensitive search
+    }
+    
+    // Filter by owner
+    if (owner) {
+      query.owner = owner;
+    }
+    
+    // Filter by privacy - exclude private challenges
+    query.privacy = { $ne: 'private' };
+    
+    // Get all challenges first
+    let allChallenges = await Challenge.find(query)
+      .sort({ createdAt: -1 })
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+    
+    // Apply activity filter (active/finished/upcoming)
+    if (activity) {
+      allChallenges = allChallenges.filter(challenge => {
+        if (!challenge.startDate || !challenge.endDate) return false;
+        
+        const startDate = new Date(challenge.startDate);
+        startDate.setHours(0, 0, 0, 0);
+        const endDate = new Date(challenge.endDate);
+        endDate.setHours(0, 0, 0, 0);
+        
+        if (activity === 'active') {
+          return startDate <= today && endDate >= today;
+        } else if (activity === 'finished') {
+          // Check if challenge is finished
+          if (endDate < today) return true;
+          
+          // For result challenges, check if all actions are done
+          if (challenge.challengeType === 'result') {
+            if (!challenge.actions || !Array.isArray(challenge.actions) || challenge.actions.length === 0) {
+              return false;
+            }
+            return challenge.actions.every(action => {
+              if (!action.checked) return false;
+              if (action.children && Array.isArray(action.children) && action.children.length > 0) {
+                return action.children.every(child => child.checked);
+              }
+              return true;
+            });
+          }
+          return false;
+        } else if (activity === 'upcoming') {
+          return startDate > today;
+        }
+        return true;
+      });
+    }
+    
+    // Apply excludeFinished filter (if excludeFinished is true, filter out finished challenges)
+    if (excludeFinished === 'true' && !activity) {
+      allChallenges = allChallenges.filter(challenge => {
         // Check if endDate is in the past
         if (challenge.endDate) {
           try {
@@ -266,16 +370,78 @@ router.get('/', async (req, res) => {
         
         return true; // Include the challenge
       });
-      
-      return res.json({ challenges: activeChallenges });
     }
     
-    // Otherwise, return all challenges
-    const challenges = await Challenge.find(query)
-      .sort({ createdAt: -1 })
-      .populate('owner', 'name avatarUrl')
-      .populate('participants.userId', 'name avatarUrl');
-    res.json({ challenges });
+    // Filter by participants count
+    if (participants) {
+      allChallenges = allChallenges.filter(challenge => {
+        const participantCount = (challenge.participants || []).length;
+        
+        if (participants === '0') {
+          return participantCount === 0;
+        } else if (participants === '1-5') {
+          return participantCount >= 1 && participantCount <= 5;
+        } else if (participants === '6+') {
+          return participantCount >= 6;
+        }
+        return true;
+      });
+    }
+    
+    // Filter by creation date
+    if (creationDate) {
+      allChallenges = allChallenges.filter(challenge => {
+        const creationDateValue = challenge.createdAt || challenge.startDate;
+        if (!creationDateValue) return false;
+        
+        const created = new Date(creationDateValue);
+        created.setHours(0, 0, 0, 0);
+        const daysDiff = Math.floor((today - created) / (1000 * 60 * 60 * 24));
+        
+        if (creationDate === 'today') {
+          return daysDiff === 0;
+        } else if (creationDate === 'week') {
+          return daysDiff >= 0 && daysDiff <= 7;
+        } else if (creationDate === 'month') {
+          return daysDiff >= 0 && daysDiff <= 30;
+        } else if (creationDate === 'older') {
+          return daysDiff > 30;
+        }
+        return true;
+      });
+    }
+    
+    // Sort by popularity if requested
+    if (popularity === 'most') {
+      // Sort by participant count descending (most popular first)
+      allChallenges.sort((a, b) => {
+        const countA = (a.participants || []).length;
+        const countB = (b.participants || []).length;
+        return countB - countA;
+      });
+    } else if (popularity === 'least') {
+      // Sort by participant count ascending (least popular first)
+      allChallenges.sort((a, b) => {
+        const countA = (a.participants || []).length;
+        const countB = (b.participants || []).length;
+        return countA - countB;
+      });
+    }
+    
+    // Apply pagination
+    const totalChallenges = allChallenges.length;
+    const paginatedChallenges = allChallenges.slice(skip, skip + limitNum);
+    const hasMore = skip + limitNum < totalChallenges;
+    
+    res.json({ 
+      challenges: paginatedChallenges,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalChallenges,
+        hasMore
+      }
+    });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
   }
@@ -323,7 +489,9 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
 router.get('/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { excludePrivate } = req.query;
+    const { excludePrivate, type, activity, participants, creationDate } = req.query;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     
     // Try to get authenticated user ID if token is provided (optional authentication)
     let requestingUserId = null;
@@ -354,6 +522,11 @@ router.get('/user/:userId', async (req, res) => {
       ]
     };
 
+    // Filter by type (challengeType)
+    if (type && (type === 'habit' || type === 'result')) {
+      query.challengeType = type;
+    }
+
     // Exclude private challenges if:
     // 1. excludePrivate query param is true (as string 'true' or boolean true), OR
     // 2. The requesting user is not viewing their own profile (or no token provided)
@@ -363,12 +536,89 @@ router.get('/user/:userId', async (req, res) => {
       query.privacy = { $ne: 'private' };
     }
 
-    const challenges = await Challenge.find(query)
+    // Get all challenges first
+    let allChallenges = await Challenge.find(query)
       .sort({ createdAt: -1 })
       .populate('owner', 'name avatarUrl')
       .populate('participants.userId', 'name avatarUrl');
 
-    res.json({ challenges });
+    // Apply activity filter (active/finished/upcoming)
+    if (activity) {
+      allChallenges = allChallenges.filter(challenge => {
+        if (!challenge.startDate || !challenge.endDate) return false;
+        
+        const startDate = new Date(challenge.startDate);
+        startDate.setHours(0, 0, 0, 0);
+        const endDate = new Date(challenge.endDate);
+        endDate.setHours(0, 0, 0, 0);
+        
+        if (activity === 'active') {
+          return startDate <= today && endDate >= today;
+        } else if (activity === 'finished') {
+          // Check if challenge is finished
+          if (endDate < today) return true;
+          
+          // For result challenges, check if all actions are done
+          if (challenge.challengeType === 'result') {
+            if (!challenge.actions || !Array.isArray(challenge.actions) || challenge.actions.length === 0) {
+              return false;
+            }
+            return challenge.actions.every(action => {
+              if (!action.checked) return false;
+              if (action.children && Array.isArray(action.children) && action.children.length > 0) {
+                return action.children.every(child => child.checked);
+              }
+              return true;
+            });
+          }
+          return false;
+        } else if (activity === 'upcoming') {
+          return startDate > today;
+        }
+        return true;
+      });
+    }
+    
+    // Filter by participants count
+    if (participants) {
+      allChallenges = allChallenges.filter(challenge => {
+        const participantCount = (challenge.participants || []).length;
+        
+        if (participants === '0') {
+          return participantCount === 0;
+        } else if (participants === '1-5') {
+          return participantCount >= 1 && participantCount <= 5;
+        } else if (participants === '6+') {
+          return participantCount >= 6;
+        }
+        return true;
+      });
+    }
+    
+    // Filter by creation date
+    if (creationDate) {
+      allChallenges = allChallenges.filter(challenge => {
+        const creationDateValue = challenge.createdAt || challenge.startDate;
+        if (!creationDateValue) return false;
+        
+        const created = new Date(creationDateValue);
+        created.setHours(0, 0, 0, 0);
+        const daysDiff = Math.floor((today - created) / (1000 * 60 * 60 * 24));
+        
+        if (creationDate === 'today') {
+          return daysDiff === 0;
+        } else if (creationDate === 'week') {
+          return daysDiff >= 0 && daysDiff <= 7;
+        } else if (creationDate === 'month') {
+          return daysDiff >= 0 && daysDiff <= 30;
+        } else if (creationDate === 'older') {
+          return daysDiff > 30;
+        }
+        return true;
+      });
+    }
+
+    res.json({ challenges: allChallenges });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
   }
