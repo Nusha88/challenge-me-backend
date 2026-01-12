@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-const { getVapidPublicKey } = require('../utils/pushService');
+const { getVapidPublicKey, getVapidDiagnostics } = require('../utils/pushService');
 
 // Middleware to authenticate token - use the same as auth routes
 const authenticateToken = (req, res, next) => {
@@ -36,6 +36,17 @@ router.get('/vapid-public-key', (req, res) => {
     res.status(500).json({ message: 'Error getting VAPID key', error: error.message });
   }
 });
+
+// Diagnostics (fingerprints only) - helps debug BadJwtToken/VAPID mismatch in prod
+router.get('/diagnostics', authenticateToken, (req, res) => {
+  try {
+    const diag = getVapidDiagnostics()
+    res.json(diag)
+  } catch (error) {
+    console.error('[Push] Error getting VAPID diagnostics:', error)
+    res.status(500).json({ message: 'Error getting diagnostics', error: error.message })
+  }
+})
 
 // Subscribe to push notifications
 router.post('/subscribe', authenticateToken, async (req, res) => {

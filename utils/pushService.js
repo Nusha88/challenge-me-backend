@@ -5,9 +5,15 @@ const crypto = require('crypto')
 // VAPID keys - Must be stored in environment variables
 // Generate keys using: node scripts/generate-vapid-keys.js
 // Trim whitespace to avoid issues with environment variable formatting
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY?.trim()
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY?.trim()
-const VAPID_CONTACT_EMAIL = (process.env.VAPID_CONTACT_EMAIL || 'mailto:your-email@example.com').trim()
+function sanitizeEnvValue(value) {
+  const v = (value ?? '').toString().trim()
+  // Render/env UI sometimes encourages quoting; strip one layer of wrapping quotes if present
+  return v.replace(/^["'](.+)["']$/s, '$1').trim()
+}
+
+const VAPID_PUBLIC_KEY = sanitizeEnvValue(process.env.VAPID_PUBLIC_KEY)
+const VAPID_PRIVATE_KEY = sanitizeEnvValue(process.env.VAPID_PRIVATE_KEY)
+const VAPID_CONTACT_EMAIL = sanitizeEnvValue(process.env.VAPID_CONTACT_EMAIL || 'mailto:your-email@example.com')
 
 function normalizeBase64Url(str) {
   return (str || '').trim().replace(/=+$/g, '')
@@ -38,6 +44,41 @@ function derivePublicKeyFromPrivateKey(privateKeyBase64Url) {
   ecdh.setPrivateKey(priv)
   const pub = ecdh.getPublicKey(null, 'uncompressed')
   return bufferToBase64Url(pub)
+}
+
+function fingerprintBase64Url(str) {
+  if (!str) return null
+  const normalized = normalizeBase64Url(str)
+  const hash = crypto.createHash('sha256').update(normalized).digest('hex')
+  // short fingerprint, enough to compare across environments without leaking secrets
+  return `${hash.slice(0, 12)}…${hash.slice(-12)}`
+}
+
+function getVapidDiagnostics() {
+  const configured = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY)
+  let derivedPublic = null
+  let matches = null
+  let validationError = null
+
+  if (configured) {
+    try {
+      derivedPublic = derivePublicKeyFromPrivateKey(VAPID_PRIVATE_KEY)
+      matches = normalizeBase64Url(derivedPublic) === normalizeBase64Url(VAPID_PUBLIC_KEY)
+    } catch (e) {
+      validationError = e.message
+    }
+  }
+
+  return {
+    configured,
+    publicKeyLength: VAPID_PUBLIC_KEY ? VAPID_PUBLIC_KEY.length : 0,
+    privateKeyLength: VAPID_PRIVATE_KEY ? VAPID_PRIVATE_KEY.length : 0,
+    publicKeyFingerprint: fingerprintBase64Url(VAPID_PUBLIC_KEY),
+    derivedPublicFingerprint: derivedPublic ? fingerprintBase64Url(derivedPublic) : null,
+    matches,
+    validationError,
+    contact: VAPID_CONTACT_EMAIL || null
+  }
 }
 
 if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
@@ -151,5 +192,6 @@ function getVapidPublicKey() {
 
 module.exports = {
   sendPushNotification,
-  getVapidPublicKey
+  getVapidPublicKey,
+  getVapidDiagnostics
 };
