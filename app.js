@@ -26,7 +26,6 @@ const defaultAllowedOrigins = [
   'http://localhost:3000'
 ];
 
-const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || 'challenge-me-space.netlify.app')
 const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || 'https://challenge-me-space.netlify.app')
   .split(',')
   .map(origin => origin.trim())
