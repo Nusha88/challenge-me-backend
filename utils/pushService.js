@@ -1,5 +1,6 @@
 const webpush = require('web-push');
 const User = require('../models/User');
+const crypto = require('crypto')
 
 // VAPID keys - Must be stored in environment variables
 // Generate keys using: node scripts/generate-vapid-keys.js
@@ -7,6 +8,37 @@ const User = require('../models/User');
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY?.trim()
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY?.trim()
 const VAPID_CONTACT_EMAIL = (process.env.VAPID_CONTACT_EMAIL || 'mailto:your-email@example.com').trim()
+
+function normalizeBase64Url(str) {
+  return (str || '').trim().replace(/=+$/g, '')
+}
+
+function base64UrlToBuffer(base64Url) {
+  const padded = normalizeBase64Url(base64Url)
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+  const padLength = (4 - (padded.length % 4)) % 4
+  const base64 = padded + '='.repeat(padLength)
+  return Buffer.from(base64, 'base64')
+}
+
+function bufferToBase64Url(buf) {
+  return Buffer.from(buf)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')
+}
+
+function derivePublicKeyFromPrivateKey(privateKeyBase64Url) {
+  // VAPID keys are on P-256 (prime256v1)
+  // Private key is 32 bytes, public key is uncompressed point 65 bytes.
+  const priv = base64UrlToBuffer(privateKeyBase64Url)
+  const ecdh = crypto.createECDH('prime256v1')
+  ecdh.setPrivateKey(priv)
+  const pub = ecdh.getPublicKey(null, 'uncompressed')
+  return bufferToBase64Url(pub)
+}
 
 if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
   console.warn('[Push Service] WARNING: VAPID keys not found in environment variables. Push notifications will not work.');
@@ -19,6 +51,20 @@ if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
   }
   if (VAPID_PRIVATE_KEY.length < 40 || VAPID_PRIVATE_KEY.length > 50) {
     console.warn(`[Push Service] WARNING: VAPID private key length seems incorrect (${VAPID_PRIVATE_KEY.length} chars). Expected ~43 chars.`);
+  }
+
+  // Validate that public/private keys are a matching pair (common cause of 403 BadJwtToken)
+  try {
+    const derivedPublic = derivePublicKeyFromPrivateKey(VAPID_PRIVATE_KEY)
+    if (normalizeBase64Url(derivedPublic) !== normalizeBase64Url(VAPID_PUBLIC_KEY)) {
+      const pub = normalizeBase64Url(VAPID_PUBLIC_KEY)
+      const der = normalizeBase64Url(derivedPublic)
+      console.warn('[Push Service] WARNING: VAPID public/private keys do NOT match. Push sends will fail with 403 BadJwtToken.')
+      console.warn(`[Push Service] Env public key:   ${pub.slice(0, 10)}…${pub.slice(-10)}`)
+      console.warn(`[Push Service] Derived public:   ${der.slice(0, 10)}…${der.slice(-10)}`)
+    }
+  } catch (e) {
+    console.warn('[Push Service] WARNING: Could not validate VAPID key pair:', e.message)
   }
 }
 
@@ -81,6 +127,12 @@ async function sendPushNotification(userId, notificationData) {
     
     // If subscription is invalid or VAPID keys don't match, remove it
     if (error.statusCode === 410 || error.statusCode === 404 || error.statusCode === 403) {
+      if (error.statusCode === 403) {
+        const body = typeof error.body === 'string' ? error.body : ''
+        if (body.includes('BadJwtToken') || body.includes('credentials') || body.includes('VAPID')) {
+          console.warn(`[Push] 403 likely due to VAPID mismatch/rotation for user ${userId}. Removing stored subscription.`)
+        }
+      }
       await User.findByIdAndUpdate(userId, { pushSubscription: null });
     }
   }
