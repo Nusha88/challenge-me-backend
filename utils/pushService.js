@@ -13,7 +13,25 @@ function sanitizeEnvValue(value) {
 
 const VAPID_PUBLIC_KEY = sanitizeEnvValue(process.env.VAPID_PUBLIC_KEY)
 const VAPID_PRIVATE_KEY = sanitizeEnvValue(process.env.VAPID_PRIVATE_KEY)
-const VAPID_CONTACT_EMAIL = sanitizeEnvValue(process.env.VAPID_CONTACT_EMAIL || 'mailto:your-email@example.com')
+
+function isValidVapidSubject(subject) {
+  if (!subject) return false
+  const s = subject.trim()
+  if (s.startsWith('mailto:')) {
+    const email = s.slice('mailto:'.length).trim()
+    // simple sanity check: local@domain.tld
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  }
+  // Alternatively allowed: URL
+  return /^https?:\/\/.+/i.test(s)
+}
+
+let VAPID_CONTACT_EMAIL = sanitizeEnvValue(process.env.VAPID_CONTACT_EMAIL || 'mailto:your-email@example.com')
+if (!isValidVapidSubject(VAPID_CONTACT_EMAIL)) {
+  console.warn(`[Push Service] WARNING: VAPID_CONTACT_EMAIL is not a valid VAPID subject ("${VAPID_CONTACT_EMAIL}").`)
+  console.warn('[Push Service] Falling back to "mailto:your-email@example.com" to avoid BadJwtToken from push providers.')
+  VAPID_CONTACT_EMAIL = 'mailto:your-email@example.com'
+}
 
 function normalizeBase64Url(str) {
   return (str || '').trim().replace(/=+$/g, '')
