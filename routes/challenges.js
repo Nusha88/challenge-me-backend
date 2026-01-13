@@ -3,6 +3,25 @@ const router = express.Router();
 const Challenge = require('../models/Challenge');
 const User = require('../models/User');
 
+function getTodayUtcString() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
+}
+
+function decodeOptionalAuthUserId(req) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return null;
+  const token = authHeader.split(' ')[1];
+  if (!token) return null;
+  try {
+    const jwt = require('jsonwebtoken');
+    const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+    const decoded = jwt.verify(token, JWT_SECRET);
+    return decoded?.id || null;
+  } catch {
+    return null;
+  }
+}
+
 // Create challenge
 router.post('/', async (req, res) => {
   try {
@@ -472,13 +491,38 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
       return res.status(404).json({ message: 'Participant not found in this challenge' });
     }
 
+    const authUserId = decodeOptionalAuthUserId(req);
+    const prevCompletedDays = Array.isArray(challenge.participants[participantIndex].completedDays)
+      ? [...challenge.participants[participantIndex].completedDays]
+      : [];
+
     // Update completedDays for this participant
     challenge.participants[participantIndex].completedDays = completedDays;
     await challenge.save();
 
+    // Award +5 XP only when today's date (UTC) is newly added, and only for the authenticated user updating themselves
+    let xpGained = 0;
+    let updatedUser = null;
+    if (authUserId && authUserId.toString() === userId.toString()) {
+      const todayStr = getTodayUtcString();
+      const hadTodayBefore = prevCompletedDays.includes(todayStr);
+      const hasTodayNow = completedDays.includes(todayStr);
+      if (!hadTodayBefore && hasTodayNow) {
+        xpGained = 5;
+        updatedUser = await User.findByIdAndUpdate(
+          userId,
+          { $inc: { xp: xpGained } },
+          { new: true, select: 'name email avatarUrl createdAt _id xp' }
+        );
+      }
+    }
+
     res.json({
       message: 'Completed days updated successfully',
-      challenge
+      challenge,
+      xpGained,
+      xp: updatedUser?.xp,
+      user: updatedUser
     });
   } catch (error) {
     res.status(500).json({ message: 'Error updating completed days', error: error.message });

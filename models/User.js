@@ -54,6 +54,15 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
       }
     }]
   }],
+  xp: {
+    type: Number,
+    default: 0
+  },
+  // Track which UTC dates already received the +50 daily 100% bonus (YYYY-MM-DD)
+  xpDailyBonusDates: {
+    type: [String],
+    default: []
+  },
   pushSubscription: {
     type: {
       endpoint: String,

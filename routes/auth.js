@@ -138,7 +138,8 @@ router.post('/register', async (req, res) => {
       name,
       email: email.trim().toLowerCase(),
       avatarUrl: req.body.avatarUrl || '',
-      password: hashedPassword
+      password: hashedPassword,
+      xp: 0
     });
     await user.save();
     // Generate JWT
@@ -151,6 +152,7 @@ router.post('/register', async (req, res) => {
         name: user.name,
         email: user.email,
         avatarUrl: user.avatarUrl,
+        xp: user.xp || 0,
         createdAt: user.createdAt
       }
     });
@@ -195,6 +197,7 @@ router.post('/login', async (req, res) => {
         name: user.name,
         email: user.email,
         avatarUrl: user.avatarUrl,
+        xp: user.xp || 0,
         createdAt: user.createdAt
       }
     });
@@ -211,6 +214,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
       name: 1,
       email: 1,
       avatarUrl: 1,
+      xp: 1,
       createdAt: 1,
       _id: 1
     });
@@ -220,6 +224,49 @@ router.get('/profile', authenticateToken, async (req, res) => {
     res.json({ user });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching profile', error: error.message });
+  }
+});
+
+// Award daily 100% bonus XP (+50) once per UTC day
+router.post('/xp/daily-bonus', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const todayStr = new Date().toISOString().slice(0, 10); // UTC YYYY-MM-DD
+    const alreadyAwarded = Array.isArray(user.xpDailyBonusDates) && user.xpDailyBonusDates.includes(todayStr);
+
+    if (alreadyAwarded) {
+      return res.json({
+        awarded: false,
+        xp: user.xp || 0,
+        date: todayStr
+      });
+    }
+
+    user.xp = (user.xp || 0) + 50;
+    user.xpDailyBonusDates = [...(user.xpDailyBonusDates || []), todayStr];
+    await user.save();
+
+    res.json({
+      awarded: true,
+      xpGained: 50,
+      xp: user.xp || 0,
+      date: todayStr,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+        xp: user.xp || 0,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Error awarding daily bonus XP:', error);
+    res.status(500).json({ message: 'Error awarding daily bonus XP', error: error.message });
   }
 });
 
@@ -425,6 +472,26 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     const tomorrow = new Date(today);
     tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
 
+    // Find today's existing checklist (if any) to award XP for newly completed tasks
+    const existingTodayChecklist = user.dailyChecklists.find(checklist => {
+      if (!checklist.date) return false;
+      const checklistDate = new Date(checklist.date);
+      const normalizedChecklistDate = new Date(Date.UTC(
+        checklistDate.getUTCFullYear(),
+        checklistDate.getUTCMonth(),
+        checklistDate.getUTCDate(),
+        0, 0, 0, 0
+      ));
+      return normalizedChecklistDate.getTime() === today.getTime();
+    });
+
+    const prevDoneCount = existingTodayChecklist?.tasks
+      ? existingTodayChecklist.tasks.filter(t => t && t.done).length
+      : 0;
+    const newDoneCount = tasks.filter(t => t && t.done).length;
+    const newlyCompleted = Math.max(0, newDoneCount - prevDoneCount);
+    const xpGained = newlyCompleted * 5;
+
     // Remove any duplicate checklists for today (cleanup)
     // Filter in JavaScript to ensure consistent date comparison
     const checklistsToKeep = user.dailyChecklists.filter(checklist => {
@@ -448,6 +515,9 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
 
     // Update user with the cleaned list
     user.dailyChecklists = checklistsToKeep;
+    if (xpGained > 0) {
+      user.xp = (user.xp || 0) + xpGained;
+    }
     const updatedUser = await user.save();
 
     // Find and return the checklist we just created
@@ -466,7 +536,17 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
 
     res.json({ 
       message: 'Checklist updated successfully',
-      checklist: updatedChecklist 
+      checklist: updatedChecklist,
+      xpGained,
+      xp: updatedUser.xp || 0,
+      user: {
+        id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        avatarUrl: updatedUser.avatarUrl,
+        xp: updatedUser.xp || 0,
+        createdAt: updatedUser.createdAt
+      }
     });
   } catch (error) {
     console.error('Error updating checklist:', error);
