@@ -452,8 +452,17 @@ router.get('/', async (req, res) => {
     const paginatedChallenges = allChallenges.slice(skip, skip + limitNum);
     const hasMore = skip + limitNum < totalChallenges;
     
+    // Add watchers count to each challenge
+    const User = require('../models/User');
+    const challengesWithWatchers = await Promise.all(paginatedChallenges.map(async (challenge) => {
+      const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
+      const challengeObj = challenge.toObject();
+      challengeObj.watchersCount = watchersCount;
+      return challengeObj;
+    }));
+    
     res.json({ 
-      challenges: paginatedChallenges,
+      challenges: challengesWithWatchers,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -662,7 +671,16 @@ router.get('/user/:userId', async (req, res) => {
       });
     }
 
-    res.json({ challenges: allChallenges });
+    // Add watchers count to each challenge
+    const User = require('../models/User');
+    const challengesWithWatchers = await Promise.all(allChallenges.map(async (challenge) => {
+      const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
+      const challengeObj = challenge.toObject();
+      challengeObj.watchersCount = watchersCount;
+      return challengeObj;
+    }));
+    
+    res.json({ challenges: challengesWithWatchers });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
   }
@@ -680,7 +698,13 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Challenge not found' });
     }
     
-    res.json(challenge);
+    // Add watchers count
+    const User = require('../models/User');
+    const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
+    const challengeObj = challenge.toObject();
+    challengeObj.watchersCount = watchersCount;
+    
+    res.json(challengeObj);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenge', error: error.message });
   }
@@ -819,7 +843,15 @@ router.get('/watched/:userId', async (req, res) => {
       .populate('participants.userId', 'name avatarUrl')
       .sort({ createdAt: -1 });
 
-    res.json({ challenges });
+    // Add watchers count to each challenge
+    const challengesWithWatchers = await Promise.all(challenges.map(async (challenge) => {
+      const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
+      const challengeObj = challenge.toObject();
+      challengeObj.watchersCount = watchersCount;
+      return challengeObj;
+    }));
+
+    res.json({ challenges: challengesWithWatchers });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching watched challenges', error: error.message });
   }
