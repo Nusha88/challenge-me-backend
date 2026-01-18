@@ -435,9 +435,77 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
     });
 
     // Return the most recent one if multiple exist (shouldn't happen after fix, but handle gracefully)
-    const todayChecklist = todayChecklists.length > 0 
+    let todayChecklist = todayChecklists.length > 0 
       ? todayChecklists.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
       : null;
+
+    // If no checklist for today exists, check if there's a checklist for yesterday that was saved as "tomorrow"
+    // This happens when user planned steps for tomorrow and now it's tomorrow (i.e., today)
+    if (!todayChecklist) {
+      const yesterday = new Date(today);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      
+      const yesterdayChecklists = user.dailyChecklists.filter(checklist => {
+        if (!checklist.date) return false;
+        const checklistDate = new Date(checklist.date);
+        const normalizedDate = new Date(Date.UTC(
+          checklistDate.getUTCFullYear(),
+          checklistDate.getUTCMonth(),
+          checklistDate.getUTCDate(),
+          0, 0, 0, 0
+        ));
+        return normalizedDate.getTime() === yesterday.getTime();
+      });
+
+      if (yesterdayChecklists.length > 0) {
+        // Migrate yesterday's checklist (which was saved as "tomorrow") to today
+        const yesterdayChecklist = yesterdayChecklists.sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+        
+        // Remove the old checklist
+        user.dailyChecklists = user.dailyChecklists.filter(checklist => {
+          if (!checklist.date) return true;
+          const checklistDate = new Date(checklist.date);
+          const normalizedDate = new Date(Date.UTC(
+            checklistDate.getUTCFullYear(),
+            checklistDate.getUTCMonth(),
+            checklistDate.getUTCDate(),
+            0, 0, 0, 0
+          ));
+          return normalizedDate.getTime() !== yesterday.getTime();
+        });
+
+        // Create today's checklist from yesterday's tasks (reset done status)
+        const migratedTasks = yesterdayChecklist.tasks.map(task => ({
+          title: task.title,
+          done: false // Reset done status for the new day
+        }));
+
+        user.dailyChecklists.push({
+          date: today,
+          tasks: migratedTasks
+        });
+
+        await user.save();
+        
+        // Find the newly created checklist
+        const updatedUser = await User.findById(req.user.id);
+        const newTodayChecklists = updatedUser.dailyChecklists.filter(checklist => {
+          if (!checklist.date) return false;
+          const checklistDate = new Date(checklist.date);
+          const normalizedDate = new Date(Date.UTC(
+            checklistDate.getUTCFullYear(),
+            checklistDate.getUTCMonth(),
+            checklistDate.getUTCDate(),
+            0, 0, 0, 0
+          ));
+          return normalizedDate.getTime() === today.getTime();
+        });
+        
+        todayChecklist = newTodayChecklists.length > 0 
+          ? newTodayChecklists.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
+          : null;
+      }
+    }
 
     if (todayChecklist) {
       res.json({ checklist: todayChecklist });
@@ -572,6 +640,124 @@ router.get('/daily-checklist/history', authenticateToken, async (req, res) => {
     console.error('Error fetching checklist history:', error);
     res.status(500).json({ message: 'Error fetching checklist history', error: error.message });
     }
+});
+
+// Get tomorrow's daily checklist
+router.get('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Normalize tomorrow's date to UTC midnight
+    const tomorrow = new Date();
+    tomorrow.setUTCHours(0, 0, 0, 0);
+    tomorrow.setUTCMilliseconds(0);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+    // Find checklist for tomorrow
+    const tomorrowChecklists = user.dailyChecklists.filter(checklist => {
+      if (!checklist.date) return false;
+      
+      const checklistDate = new Date(checklist.date);
+      const normalizedDate = new Date(Date.UTC(
+        checklistDate.getUTCFullYear(),
+        checklistDate.getUTCMonth(),
+        checklistDate.getUTCDate(),
+        0, 0, 0, 0
+      ));
+      
+      return normalizedDate.getTime() === tomorrow.getTime();
+    });
+
+    const tomorrowChecklist = tomorrowChecklists.length > 0
+      ? tomorrowChecklists[tomorrowChecklists.length - 1]
+      : null;
+
+    if (tomorrowChecklist) {
+      res.json({ checklist: tomorrowChecklist });
+    } else {
+      res.json({ checklist: null });
+    }
+  } catch (error) {
+    console.error('Error fetching tomorrow\'s checklist:', error);
+    res.status(500).json({ message: 'Error fetching checklist', error: error.message });
+  }
+});
+
+// Update tomorrow's daily checklist
+router.put('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
+  try {
+    const { tasks } = req.body;
+    
+    if (!Array.isArray(tasks)) {
+      return res.status(400).json({ message: 'Tasks must be an array' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Normalize tomorrow's date to UTC midnight
+    const tomorrow = new Date();
+    tomorrow.setUTCHours(0, 0, 0, 0);
+    tomorrow.setUTCMilliseconds(0);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+    // Remove any duplicate checklists for tomorrow
+    const checklistsToKeep = user.dailyChecklists.filter(checklist => {
+      if (!checklist.date) return true;
+      const checklistDate = new Date(checklist.date);
+      const normalizedDate = new Date(Date.UTC(
+        checklistDate.getUTCFullYear(),
+        checklistDate.getUTCMonth(),
+        checklistDate.getUTCDate(),
+        0, 0, 0, 0
+      ));
+      return normalizedDate.getTime() !== tomorrow.getTime();
+    });
+
+    // Add tomorrow's checklist
+    checklistsToKeep.push({
+      date: tomorrow,
+      tasks: tasks
+    });
+
+    // Update user with the cleaned list
+    user.dailyChecklists = checklistsToKeep;
+    const updatedUser = await user.save();
+
+    // Find and return the checklist we just created
+    const updatedChecklist = updatedUser.dailyChecklists.find(checklist => {
+      if (!checklist.date) return false;
+      const checklistDate = new Date(checklist.date);
+      const normalizedDate = new Date(Date.UTC(
+        checklistDate.getUTCFullYear(),
+        checklistDate.getUTCMonth(),
+        checklistDate.getUTCDate(),
+        0, 0, 0, 0
+      ));
+      return normalizedDate.getTime() === tomorrow.getTime();
+    });
+
+    res.json({ 
+      message: 'Tomorrow\'s checklist updated successfully',
+      checklist: updatedChecklist,
+      user: {
+        id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        avatarUrl: updatedUser.avatarUrl,
+        xp: updatedUser.xp || 0,
+        createdAt: updatedUser.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Error updating tomorrow\'s checklist:', error);
+    res.status(500).json({ message: 'Error updating checklist', error: error.message });
+  }
 });
 
 module.exports = router; 
