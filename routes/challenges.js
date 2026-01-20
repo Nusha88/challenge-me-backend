@@ -27,13 +27,13 @@ router.post('/', async (req, res) => {
   try {
     const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments } = req.body;
 
-    if (!title || !description || !startDate || !endDate || !owner) {
+    if (!title || !startDate || !endDate || !owner) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
     const challengeData = { 
       title, 
-      description, 
+      description: description || '', 
       startDate, 
       endDate, 
       owner, 
@@ -84,11 +84,11 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments } = req.body;
 
-    if (!title || !description || !startDate || !endDate) {
+    if (!title || !startDate || !endDate) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    const update = { title, description, startDate, endDate };
+    const update = { title, description: description || '', startDate, endDate };
     if (owner) {
       update.owner = owner;
     }
