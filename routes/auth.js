@@ -408,104 +408,56 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Normalize today's date to UTC midnight for consistent comparison across timezones
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    today.setUTCMilliseconds(0);
-    
-    const tomorrow = new Date(today);
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    // Use client-local day when provided to avoid timezone bugs (yesterday showing as today).
+    // Headers:
+    // - x-client-day: "YYYY-MM-DD" in the CLIENT'S local calendar
+    // - x-client-tz-offset: minutes from UTC (Date.getTimezoneOffset())
+    function getClientDayRange(dayOffset = 0) {
+      const rawDay = req.headers['x-client-day'];
+      const rawOffset = req.headers['x-client-tz-offset'];
+      const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
+      const dayStr = typeof rawDay === 'string' ? rawDay : null;
+
+      // Fallback: old behavior (UTC day)
+      if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr) || tzOffsetMin === null) {
+        const startUtc = new Date();
+        startUtc.setUTCHours(0, 0, 0, 0);
+        startUtc.setUTCMilliseconds(0);
+        startUtc.setUTCDate(startUtc.getUTCDate() + dayOffset);
+        const endUtc = new Date(startUtc);
+        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
+        return { startUtc, endUtc };
+      }
+
+      const [y, m, d] = dayStr.split('-').map(Number);
+      // local midnight -> UTC = Date.UTC(...) + tzOffsetMin minutes
+      const startMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) + tzOffsetMin * 60 * 1000;
+      const startUtc = new Date(startMs);
+      const endUtc = new Date(startMs + 24 * 60 * 60 * 1000);
+      // Apply dayOffset in local-day units
+      if (dayOffset !== 0) {
+        startUtc.setTime(startUtc.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+        endUtc.setTime(endUtc.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+      }
+      return { startUtc, endUtc };
+    }
+
+    const { startUtc: todayStartUtc, endUtc: todayEndUtc } = getClientDayRange(0);
 
     // Find checklist for today - use a range to handle timezone differences
-    // Check if checklist date falls within today's UTC day (00:00:00 to 23:59:59)
+    // Check if checklist date falls within client's "today" window in UTC
     const todayChecklists = user.dailyChecklists.filter(checklist => {
       if (!checklist.date) return false;
       
       const checklistDate = new Date(checklist.date);
-      // Normalize to UTC midnight for comparison
-      const normalizedDate = new Date(Date.UTC(
-        checklistDate.getUTCFullYear(),
-        checklistDate.getUTCMonth(),
-        checklistDate.getUTCDate(),
-        0, 0, 0, 0
-      ));
-      
-      // Compare normalized dates
-      return normalizedDate.getTime() === today.getTime();
+      const t = checklistDate.getTime();
+      return t >= todayStartUtc.getTime() && t < todayEndUtc.getTime();
     });
 
     // Return the most recent one if multiple exist (shouldn't happen after fix, but handle gracefully)
     let todayChecklist = todayChecklists.length > 0 
       ? todayChecklists.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
       : null;
-
-    // If no checklist for today exists, check if there's a checklist for yesterday that was saved as "tomorrow"
-    // This happens when user planned steps for tomorrow and now it's tomorrow (i.e., today)
-    if (!todayChecklist) {
-      const yesterday = new Date(today);
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-      
-      const yesterdayChecklists = user.dailyChecklists.filter(checklist => {
-        if (!checklist.date) return false;
-        const checklistDate = new Date(checklist.date);
-        const normalizedDate = new Date(Date.UTC(
-          checklistDate.getUTCFullYear(),
-          checklistDate.getUTCMonth(),
-          checklistDate.getUTCDate(),
-          0, 0, 0, 0
-        ));
-        return normalizedDate.getTime() === yesterday.getTime();
-      });
-
-      if (yesterdayChecklists.length > 0) {
-        // Migrate yesterday's checklist (which was saved as "tomorrow") to today
-        const yesterdayChecklist = yesterdayChecklists.sort((a, b) => new Date(b.date) - new Date(a.date))[0];
-        
-        // Remove the old checklist
-        user.dailyChecklists = user.dailyChecklists.filter(checklist => {
-          if (!checklist.date) return true;
-          const checklistDate = new Date(checklist.date);
-          const normalizedDate = new Date(Date.UTC(
-            checklistDate.getUTCFullYear(),
-            checklistDate.getUTCMonth(),
-            checklistDate.getUTCDate(),
-            0, 0, 0, 0
-          ));
-          return normalizedDate.getTime() !== yesterday.getTime();
-        });
-
-        // Create today's checklist from yesterday's tasks (reset done status)
-        const migratedTasks = yesterdayChecklist.tasks.map(task => ({
-          title: task.title,
-          done: false // Reset done status for the new day
-        }));
-
-        user.dailyChecklists.push({
-          date: today,
-          tasks: migratedTasks
-        });
-
-        await user.save();
-        
-        // Find the newly created checklist
-        const updatedUser = await User.findById(req.user.id);
-        const newTodayChecklists = updatedUser.dailyChecklists.filter(checklist => {
-          if (!checklist.date) return false;
-          const checklistDate = new Date(checklist.date);
-          const normalizedDate = new Date(Date.UTC(
-            checklistDate.getUTCFullYear(),
-            checklistDate.getUTCMonth(),
-            checklistDate.getUTCDate(),
-            0, 0, 0, 0
-          ));
-          return normalizedDate.getTime() === today.getTime();
-        });
-        
-        todayChecklist = newTodayChecklists.length > 0 
-          ? newTodayChecklists.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
-          : null;
-      }
-    }
 
     if (todayChecklist) {
       res.json({ checklist: todayChecklist });
@@ -532,25 +484,42 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Normalize today's date to UTC midnight for consistent comparison across timezones
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    today.setUTCMilliseconds(0);
-    
-    const tomorrow = new Date(today);
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    // Use client-local day when provided to avoid timezone bugs.
+    function getClientDayRange(dayOffset = 0) {
+      const rawDay = req.headers['x-client-day'];
+      const rawOffset = req.headers['x-client-tz-offset'];
+      const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
+      const dayStr = typeof rawDay === 'string' ? rawDay : null;
+
+      // Fallback: old behavior (UTC day)
+      if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr) || tzOffsetMin === null) {
+        const startUtc = new Date();
+        startUtc.setUTCHours(0, 0, 0, 0);
+        startUtc.setUTCMilliseconds(0);
+        startUtc.setUTCDate(startUtc.getUTCDate() + dayOffset);
+        const endUtc = new Date(startUtc);
+        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
+        return { startUtc, endUtc };
+      }
+
+      const [y, m, d] = dayStr.split('-').map(Number);
+      const startMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) + tzOffsetMin * 60 * 1000;
+      const startUtc = new Date(startMs);
+      const endUtc = new Date(startMs + 24 * 60 * 60 * 1000);
+      if (dayOffset !== 0) {
+        startUtc.setTime(startUtc.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+        endUtc.setTime(endUtc.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+      }
+      return { startUtc, endUtc };
+    }
+
+    const { startUtc: todayStartUtc, endUtc: todayEndUtc } = getClientDayRange(0);
 
     // Find today's existing checklist (if any) to award XP for newly completed tasks
     const existingTodayChecklist = user.dailyChecklists.find(checklist => {
       if (!checklist.date) return false;
-      const checklistDate = new Date(checklist.date);
-      const normalizedChecklistDate = new Date(Date.UTC(
-        checklistDate.getUTCFullYear(),
-        checklistDate.getUTCMonth(),
-        checklistDate.getUTCDate(),
-        0, 0, 0, 0
-      ));
-      return normalizedChecklistDate.getTime() === today.getTime();
+      const t = new Date(checklist.date).getTime();
+      return t >= todayStartUtc.getTime() && t < todayEndUtc.getTime();
     });
 
     const prevDoneCount = existingTodayChecklist?.tasks
@@ -560,24 +529,16 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     const newlyCompleted = Math.max(0, newDoneCount - prevDoneCount);
     const xpGained = newlyCompleted * 5;
 
-    // Remove any duplicate checklists for today (cleanup)
-    // Filter in JavaScript to ensure consistent date comparison
+    // Remove any duplicate checklists for today (cleanup) using client's today window
     const checklistsToKeep = user.dailyChecklists.filter(checklist => {
       if (!checklist.date) return true;
-      const checklistDate = new Date(checklist.date);
-      // Normalize to UTC midnight using Date.UTC for consistent comparison
-      const normalizedChecklistDate = new Date(Date.UTC(
-        checklistDate.getUTCFullYear(),
-        checklistDate.getUTCMonth(),
-        checklistDate.getUTCDate(),
-        0, 0, 0, 0
-      ));
-      return normalizedChecklistDate.getTime() !== today.getTime();
+      const t = new Date(checklist.date).getTime();
+      return !(t >= todayStartUtc.getTime() && t < todayEndUtc.getTime());
     });
 
-    // Add today's checklist
+    // Add today's checklist (store at the start of the client's day window in UTC)
     checklistsToKeep.push({
-      date: today,
+      date: todayStartUtc,
       tasks: tasks
     });
 
@@ -591,15 +552,8 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     // Find and return the checklist we just created
     const updatedChecklist = updatedUser.dailyChecklists.find(checklist => {
       if (!checklist.date) return false;
-      const checklistDate = new Date(checklist.date);
-      // Normalize to UTC midnight using Date.UTC for consistent comparison
-      const normalizedChecklistDate = new Date(Date.UTC(
-        checklistDate.getUTCFullYear(),
-        checklistDate.getUTCMonth(),
-        checklistDate.getUTCDate(),
-        0, 0, 0, 0
-      ));
-      return normalizedChecklistDate.getTime() === today.getTime();
+      const t = new Date(checklist.date).getTime();
+      return t >= todayStartUtc.getTime() && t < todayEndUtc.getTime();
     });
 
     res.json({ 
@@ -630,12 +584,43 @@ router.get('/daily-checklist/history', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Sort by date descending (newest first)
-    const sortedChecklists = user.dailyChecklists.sort((a, b) => {
-      return new Date(b.date) - new Date(a.date);
-    });
+    // Group and label by CLIENT local day to avoid "yesterday shown as today" in the journal.
+    const rawOffset = req.headers['x-client-tz-offset'];
+    const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
 
-    res.json({ checklists: sortedChecklists });
+    function toClientDayKey(date) {
+      const ms = new Date(date).getTime();
+      if (!Number.isFinite(ms)) return null;
+      // Convert UTC instant -> client's local clock by subtracting tzOffset minutes
+      const localMs = tzOffsetMin === null ? ms : (ms - tzOffsetMin * 60 * 1000);
+      const d = new Date(localMs);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(d.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    // Keep the most recent checklist per client day
+    const byDay = new Map();
+    for (const c of user.dailyChecklists || []) {
+      if (!c?.date) continue;
+      const key = toClientDayKey(c.date);
+      if (!key) continue;
+      const prev = byDay.get(key);
+      if (!prev || new Date(c.date) > new Date(prev.date)) {
+        byDay.set(key, c);
+      }
+    }
+
+    const grouped = Array.from(byDay.entries()).map(([clientDay, checklist]) => ({
+      ...checklist.toObject?.() || checklist,
+      clientDay
+    }));
+
+    // Sort by clientDay descending
+    grouped.sort((a, b) => (a.clientDay < b.clientDay ? 1 : a.clientDay > b.clientDay ? -1 : 0));
+
+    res.json({ checklists: grouped });
   } catch (error) {
     console.error('Error fetching checklist history:', error);
     res.status(500).json({ message: 'Error fetching checklist history', error: error.message });
@@ -650,25 +635,38 @@ router.get('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Normalize tomorrow's date to UTC midnight
-    const tomorrow = new Date();
-    tomorrow.setUTCHours(0, 0, 0, 0);
-    tomorrow.setUTCMilliseconds(0);
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    // Use client-local day when provided (tomorrow = client today + 1)
+    function getClientDayRange(dayOffset = 0) {
+      const rawDay = req.headers['x-client-day'];
+      const rawOffset = req.headers['x-client-tz-offset'];
+      const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
+      const dayStr = typeof rawDay === 'string' ? rawDay : null;
+
+      if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr) || tzOffsetMin === null) {
+        const startUtc = new Date();
+        startUtc.setUTCHours(0, 0, 0, 0);
+        startUtc.setUTCMilliseconds(0);
+        startUtc.setUTCDate(startUtc.getUTCDate() + dayOffset);
+        const endUtc = new Date(startUtc);
+        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
+        return { startUtc, endUtc };
+      }
+
+      const [y, m, d] = dayStr.split('-').map(Number);
+      const baseStartMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) + tzOffsetMin * 60 * 1000;
+      const startMs = baseStartMs + dayOffset * 24 * 60 * 60 * 1000;
+      const startUtc = new Date(startMs);
+      const endUtc = new Date(startMs + 24 * 60 * 60 * 1000);
+      return { startUtc, endUtc };
+    }
+
+    const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc } = getClientDayRange(1);
 
     // Find checklist for tomorrow
     const tomorrowChecklists = user.dailyChecklists.filter(checklist => {
       if (!checklist.date) return false;
-      
-      const checklistDate = new Date(checklist.date);
-      const normalizedDate = new Date(Date.UTC(
-        checklistDate.getUTCFullYear(),
-        checklistDate.getUTCMonth(),
-        checklistDate.getUTCDate(),
-        0, 0, 0, 0
-      ));
-      
-      return normalizedDate.getTime() === tomorrow.getTime();
+      const t = new Date(checklist.date).getTime();
+      return t >= tomorrowStartUtc.getTime() && t < tomorrowEndUtc.getTime();
     });
 
     const tomorrowChecklist = tomorrowChecklists.length > 0
@@ -700,28 +698,43 @@ router.put('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Normalize tomorrow's date to UTC midnight
-    const tomorrow = new Date();
-    tomorrow.setUTCHours(0, 0, 0, 0);
-    tomorrow.setUTCMilliseconds(0);
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    // Use client-local day when provided (tomorrow = client today + 1)
+    function getClientDayRange(dayOffset = 0) {
+      const rawDay = req.headers['x-client-day'];
+      const rawOffset = req.headers['x-client-tz-offset'];
+      const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
+      const dayStr = typeof rawDay === 'string' ? rawDay : null;
+
+      if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr) || tzOffsetMin === null) {
+        const startUtc = new Date();
+        startUtc.setUTCHours(0, 0, 0, 0);
+        startUtc.setUTCMilliseconds(0);
+        startUtc.setUTCDate(startUtc.getUTCDate() + dayOffset);
+        const endUtc = new Date(startUtc);
+        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
+        return { startUtc, endUtc };
+      }
+
+      const [y, m, d] = dayStr.split('-').map(Number);
+      const baseStartMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) + tzOffsetMin * 60 * 1000;
+      const startMs = baseStartMs + dayOffset * 24 * 60 * 60 * 1000;
+      const startUtc = new Date(startMs);
+      const endUtc = new Date(startMs + 24 * 60 * 60 * 1000);
+      return { startUtc, endUtc };
+    }
+
+    const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc } = getClientDayRange(1);
 
     // Remove any duplicate checklists for tomorrow
     const checklistsToKeep = user.dailyChecklists.filter(checklist => {
       if (!checklist.date) return true;
-      const checklistDate = new Date(checklist.date);
-      const normalizedDate = new Date(Date.UTC(
-        checklistDate.getUTCFullYear(),
-        checklistDate.getUTCMonth(),
-        checklistDate.getUTCDate(),
-        0, 0, 0, 0
-      ));
-      return normalizedDate.getTime() !== tomorrow.getTime();
+      const t = new Date(checklist.date).getTime();
+      return !(t >= tomorrowStartUtc.getTime() && t < tomorrowEndUtc.getTime());
     });
 
     // Add tomorrow's checklist
     checklistsToKeep.push({
-      date: tomorrow,
+      date: tomorrowStartUtc,
       tasks: tasks
     });
 
@@ -732,14 +745,8 @@ router.put('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
     // Find and return the checklist we just created
     const updatedChecklist = updatedUser.dailyChecklists.find(checklist => {
       if (!checklist.date) return false;
-      const checklistDate = new Date(checklist.date);
-      const normalizedDate = new Date(Date.UTC(
-        checklistDate.getUTCFullYear(),
-        checklistDate.getUTCMonth(),
-        checklistDate.getUTCDate(),
-        0, 0, 0, 0
-      ));
-      return normalizedDate.getTime() === tomorrow.getTime();
+      const t = new Date(checklist.date).getTime();
+      return t >= tomorrowStartUtc.getTime() && t < tomorrowEndUtc.getTime();
     });
 
     res.json({ 
