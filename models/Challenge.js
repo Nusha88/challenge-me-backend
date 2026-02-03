@@ -110,6 +110,20 @@ const challengeSchema = new mongoose.Schema(
           trim: true,
           maxlength: 1000
         },
+        imageUrl: {
+          type: String,
+          default: null
+        },
+        reactions: {
+          type: Map,
+          of: [{
+            userId: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: 'User'
+            }
+          }],
+          default: {}
+        },
         createdAt: {
           type: Date,
           default: Date.now
@@ -127,10 +141,24 @@ const challengeSchema = new mongoose.Schema(
               trim: true,
               maxlength: 1000
             },
+            imageUrl: {
+              type: String,
+              default: null
+            },
             mentionedUserId: {
               type: mongoose.Schema.Types.ObjectId,
               ref: 'User',
               default: null
+            },
+            reactions: {
+              type: Map,
+              of: [{
+                userId: {
+                  type: mongoose.Schema.Types.ObjectId,
+                  ref: 'User'
+                }
+              }],
+              default: {}
             },
             createdAt: {
               type: Date,
@@ -149,10 +177,24 @@ const challengeSchema = new mongoose.Schema(
                   trim: true,
                   maxlength: 1000
                 },
+                imageUrl: {
+                  type: String,
+                  default: null
+                },
                 mentionedUserId: {
                   type: mongoose.Schema.Types.ObjectId,
                   ref: 'User',
                   default: null
+                },
+                reactions: {
+                  type: Map,
+                  of: [{
+                    userId: {
+                      type: mongoose.Schema.Types.ObjectId,
+                      ref: 'User'
+                    }
+                  }],
+                  default: {}
                 },
                 createdAt: {
                   type: Date,

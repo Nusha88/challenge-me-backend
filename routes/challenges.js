@@ -860,10 +860,14 @@ router.get('/watched/:userId', async (req, res) => {
 // Add a comment to a challenge
 router.post('/:id/comments', async (req, res) => {
   try {
-    const { userId, text } = req.body;
+    const { userId, text, imageUrl } = req.body;
     
-    if (!userId || !text || !text.trim()) {
-      return res.status(400).json({ message: 'User ID and comment text are required' });
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+    
+    if ((!text || !text.trim()) && !imageUrl) {
+      return res.status(400).json({ message: 'Comment text or image is required' });
     }
 
     const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
@@ -877,7 +881,8 @@ router.post('/:id/comments', async (req, res) => {
 
     const comment = {
       userId,
-      text: text.trim(),
+      text: (text && text.trim()) ? text.trim() : ' ',
+      imageUrl: imageUrl || null,
       createdAt: new Date()
     };
 
@@ -984,7 +989,7 @@ router.get('/:id/comments', async (req, res) => {
 // Reply to a comment
 router.post('/:id/comments/:commentId/reply', async (req, res) => {
   try {
-    const { userId, text, mentionedUserId } = req.body;
+    const { userId, text, mentionedUserId, imageUrl } = req.body;
     
     if (!userId || !text || !text.trim()) {
       return res.status(400).json({ message: 'User ID and reply text are required' });
@@ -1007,6 +1012,7 @@ router.post('/:id/comments/:commentId/reply', async (req, res) => {
     const reply = {
       userId,
       text: text.trim(),
+      imageUrl: imageUrl || null,
       mentionedUserId: mentionedUserId || null,
       createdAt: new Date()
     };
@@ -1083,7 +1089,7 @@ router.delete('/:id/comments/:commentId', async (req, res) => {
 // Reply to a reply (nested reply)
 router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) => {
   try {
-    const { userId, text, mentionedUserId } = req.body;
+    const { userId, text, mentionedUserId, imageUrl } = req.body;
     
     if (!userId || !text || !text.trim()) {
       return res.status(400).json({ message: 'User ID and reply text are required' });
@@ -1111,6 +1117,7 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) 
     const nestedReply = {
       userId,
       text: text.trim(),
+      imageUrl: imageUrl || null,
       mentionedUserId: mentionedUserId || null,
       createdAt: new Date()
     };
@@ -1282,6 +1289,249 @@ router.delete('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId'
     res.json({ message: 'Nested reply deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Error deleting nested reply', error: error.message });
+  }
+});
+
+// Add or remove reaction to a comment
+router.post('/:id/comments/:commentId/reactions', async (req, res) => {
+  try {
+    const { userId, emoji } = req.body;
+    
+    if (!userId || !emoji) {
+      return res.status(400).json({ message: 'User ID and emoji are required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const comment = challenge.comments.id(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    // Initialize reactions Map if it doesn't exist
+    if (!comment.reactions) {
+      comment.reactions = new Map();
+    }
+
+    // Get or create the emoji array
+    if (!comment.reactions.has(emoji)) {
+      comment.reactions.set(emoji, []);
+    }
+
+    const emojiReactions = comment.reactions.get(emoji);
+    const userIdStr = userId.toString();
+
+    // Check if user already reacted
+    const existingIndex = emojiReactions.findIndex(r => {
+      const rUserId = r.userId?._id || r.userId;
+      return rUserId && rUserId.toString() === userIdStr;
+    });
+
+    if (existingIndex >= 0) {
+      // Remove reaction
+      emojiReactions.splice(existingIndex, 1);
+      if (emojiReactions.length === 0) {
+        comment.reactions.delete(emoji);
+      }
+    } else {
+      // Add reaction
+      emojiReactions.push({ userId });
+    }
+
+    await challenge.save();
+
+    // Populate user info for reactions
+    const User = require('../models/User');
+    const populatedReactions = {};
+    for (const [emojiKey, reactions] of comment.reactions.entries()) {
+      populatedReactions[emojiKey] = await Promise.all(
+        reactions.map(async (r) => {
+          if (r.userId && !r.userId.name) {
+            const uid = r.userId._id || r.userId;
+            const user = await User.findById(uid).select('name avatarUrl');
+            return { userId: user || r.userId };
+          }
+          return r;
+        })
+      );
+    }
+
+    res.json({ 
+      message: existingIndex >= 0 ? 'Reaction removed' : 'Reaction added',
+      reactions: populatedReactions
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating reaction', error: error.message });
+  }
+});
+
+// Add or remove reaction to a reply
+router.post('/:id/comments/:commentId/replies/:replyId/reactions', async (req, res) => {
+  try {
+    const { userId, emoji } = req.body;
+    
+    if (!userId || !emoji) {
+      return res.status(400).json({ message: 'User ID and emoji are required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const comment = challenge.comments.id(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    const reply = comment.replies.id(req.params.replyId);
+    if (!reply) {
+      return res.status(404).json({ message: 'Reply not found' });
+    }
+
+    // Initialize reactions Map if it doesn't exist
+    if (!reply.reactions) {
+      reply.reactions = new Map();
+    }
+
+    // Get or create the emoji array
+    if (!reply.reactions.has(emoji)) {
+      reply.reactions.set(emoji, []);
+    }
+
+    const emojiReactions = reply.reactions.get(emoji);
+    const userIdStr = userId.toString();
+
+    // Check if user already reacted
+    const existingIndex = emojiReactions.findIndex(r => {
+      const rUserId = r.userId?._id || r.userId;
+      return rUserId && rUserId.toString() === userIdStr;
+    });
+
+    if (existingIndex >= 0) {
+      // Remove reaction
+      emojiReactions.splice(existingIndex, 1);
+      if (emojiReactions.length === 0) {
+        reply.reactions.delete(emoji);
+      }
+    } else {
+      // Add reaction
+      emojiReactions.push({ userId });
+    }
+
+    await challenge.save();
+
+    // Populate user info for reactions
+    const User = require('../models/User');
+    const populatedReactions = {};
+    for (const [emojiKey, reactions] of reply.reactions.entries()) {
+      populatedReactions[emojiKey] = await Promise.all(
+        reactions.map(async (r) => {
+          if (r.userId && !r.userId.name) {
+            const uid = r.userId._id || r.userId;
+            const user = await User.findById(uid).select('name avatarUrl');
+            return { userId: user || r.userId };
+          }
+          return r;
+        })
+      );
+    }
+
+    res.json({ 
+      message: existingIndex >= 0 ? 'Reaction removed' : 'Reaction added',
+      reactions: populatedReactions
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating reaction', error: error.message });
+  }
+});
+
+// Add or remove reaction to a nested reply
+router.post('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId/reactions', async (req, res) => {
+  try {
+    const { userId, emoji } = req.body;
+    
+    if (!userId || !emoji) {
+      return res.status(400).json({ message: 'User ID and emoji are required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const comment = challenge.comments.id(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    const parentReply = comment.replies.id(req.params.replyId);
+    if (!parentReply) {
+      return res.status(404).json({ message: 'Reply not found' });
+    }
+
+    const nestedReply = parentReply.replies.id(req.params.nestedReplyId);
+    if (!nestedReply) {
+      return res.status(404).json({ message: 'Nested reply not found' });
+    }
+
+    // Initialize reactions Map if it doesn't exist
+    if (!nestedReply.reactions) {
+      nestedReply.reactions = new Map();
+    }
+
+    // Get or create the emoji array
+    if (!nestedReply.reactions.has(emoji)) {
+      nestedReply.reactions.set(emoji, []);
+    }
+
+    const emojiReactions = nestedReply.reactions.get(emoji);
+    const userIdStr = userId.toString();
+
+    // Check if user already reacted
+    const existingIndex = emojiReactions.findIndex(r => {
+      const rUserId = r.userId?._id || r.userId;
+      return rUserId && rUserId.toString() === userIdStr;
+    });
+
+    if (existingIndex >= 0) {
+      // Remove reaction
+      emojiReactions.splice(existingIndex, 1);
+      if (emojiReactions.length === 0) {
+        nestedReply.reactions.delete(emoji);
+      }
+    } else {
+      // Add reaction
+      emojiReactions.push({ userId });
+    }
+
+    await challenge.save();
+
+    // Populate user info for reactions
+    const User = require('../models/User');
+    const populatedReactions = {};
+    for (const [emojiKey, reactions] of nestedReply.reactions.entries()) {
+      populatedReactions[emojiKey] = await Promise.all(
+        reactions.map(async (r) => {
+          if (r.userId && !r.userId.name) {
+            const uid = r.userId._id || r.userId;
+            const user = await User.findById(uid).select('name avatarUrl');
+            return { userId: user || r.userId };
+          }
+          return r;
+        })
+      );
+    }
+
+    res.json({ 
+      message: existingIndex >= 0 ? 'Reaction removed' : 'Reaction added',
+      reactions: populatedReactions
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating reaction', error: error.message });
   }
 });
 
