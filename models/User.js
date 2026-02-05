@@ -63,6 +63,23 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: [String],
     default: []
   },
+  // Track which streak milestones have been awarded (e.g., [7, 14, 30])
+  streakMilestonesAwarded: {
+    type: [Number],
+    default: []
+  },
+  // Track challenges that awarded completion XP
+  completedChallengesXpAwarded: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'Challenge',
+    default: []
+  },
+  // Track challenges that awarded first comment XP
+  commentedChallengesXpAwarded: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'Challenge',
+    default: []
+  },
   pushSubscription: {
     type: {
       endpoint: String,

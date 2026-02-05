@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const Challenge = require('../models/Challenge');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { sendPasswordResetEmail } = require('../utils/emailService');
@@ -29,7 +30,6 @@ router.get('/users', async (req, res) => {
         error: 'User model not found'
       });
     }
-    const Challenge = require('../models/Challenge');
     
     // Pagination parameters
     const page = parseInt(req.query.page) || 1;
@@ -547,6 +547,84 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     if (xpGained > 0) {
       user.xp = (user.xp || 0) + xpGained;
     }
+    
+    // Check for 7-day streak milestone and award XP
+    const habitChallenges = await Challenge.find({
+      challengeType: 'habit',
+      'participants.userId': user._id
+    });
+    
+    // Calculate current streak
+    let currentStreak = 0;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Helper function to check if a day was completed
+    const checkDayCompletion = (date) => {
+      const dateStr = date.toISOString().slice(0, 10);
+      
+      // Check checklist
+      const checklistForDate = user.dailyChecklists.find(c => {
+        if (!c.date) return false;
+        const checklistDate = new Date(c.date);
+        checklistDate.setHours(0, 0, 0, 0);
+        return checklistDate.getTime() === date.getTime();
+      });
+      
+      const hasCompletedChecklistTask = checklistForDate && checklistForDate.tasks && checklistForDate.tasks.length > 0
+        ? checklistForDate.tasks.some(task => task.done === true)
+        : false;
+      
+      // Check habit challenges
+      let hasCompletedChallenge = false;
+      for (const challenge of habitChallenges) {
+        if (!challenge.participants || challenge.participants.length === 0) continue;
+        
+        const participant = challenge.participants.find(p => {
+          const pUserId = p.userId?._id || p.userId || p._id;
+          return pUserId && pUserId.toString() === user._id.toString();
+        });
+        
+        if (participant && participant.completedDays && Array.isArray(participant.completedDays)) {
+          const hasDate = participant.completedDays.some(completedDate => {
+            if (!completedDate) return false;
+            let completedDateStr = String(completedDate);
+            if (completedDateStr.includes('T')) {
+              completedDateStr = completedDateStr.split('T')[0];
+            }
+            completedDateStr = completedDateStr.substring(0, 10);
+            return completedDateStr === dateStr;
+          });
+          
+          if (hasDate) {
+            hasCompletedChallenge = true;
+            break;
+          }
+        }
+      }
+      
+      return hasCompletedChecklistTask || hasCompletedChallenge;
+    };
+    
+    // Calculate streak starting from today
+    let checkDate = new Date(today);
+    for (let i = 0; i < 365; i++) {
+      if (checkDayCompletion(checkDate)) {
+        currentStreak++;
+      } else {
+        break;
+      }
+      checkDate.setDate(checkDate.getDate() - 1);
+      checkDate.setHours(0, 0, 0, 0);
+    }
+    
+    // Award +50 XP for 7-day streak milestone if not already awarded
+    if (currentStreak >= 7 && !user.streakMilestonesAwarded?.includes(7)) {
+      user.xp = (user.xp || 0) + 50;
+      user.streakMilestonesAwarded = [...(user.streakMilestonesAwarded || []), 7];
+      xpGained += 50;
+    }
+    
     const updatedUser = await user.save();
 
     // Find and return the checklist we just created
