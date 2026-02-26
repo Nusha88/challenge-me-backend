@@ -22,6 +22,45 @@ function decodeOptionalAuthUserId(req) {
   }
 }
 
+function isChallengeCompleted(challenge, today) {
+  // Check if endDate is in the past
+  if (challenge.endDate) {
+    try {
+      const endDate = new Date(challenge.endDate);
+      endDate.setHours(0, 0, 0, 0);
+      if (endDate < today) {
+        return true; // Challenge ended
+      }
+    } catch (e) {
+      // Continue if date parsing fails
+    }
+  }
+  
+  // For result challenges, check if all actions are done
+  if (challenge.challengeType === 'result') {
+    if (!challenge.actions || !Array.isArray(challenge.actions) || challenge.actions.length === 0) {
+      return false; // Not completed if no actions
+    }
+    
+    // Check if all actions and their children are checked
+    const allActionsDone = challenge.actions.every(action => {
+      // Parent action must be checked
+      if (!action.checked) return false;
+      
+      // All children must be checked (if any exist)
+      if (action.children && Array.isArray(action.children) && action.children.length > 0) {
+        return action.children.every(child => child.checked);
+      }
+      
+      return true;
+    });
+    
+    return allActionsDone;
+  }
+  
+  return false; // Not completed
+}
+
 // Create challenge
 router.post('/', async (req, res) => {
   try {
@@ -275,7 +314,7 @@ router.post('/:id/leave', async (req, res) => {
 // Get all challenges
 router.get('/', async (req, res) => {
   try {
-    const { excludeFinished, type, activity, participants, creationDate, page, limit, title, owner, popularity } = req.query;
+    const { excludeFinished, type, activity, participants, creationDate, page, limit, title, owner, createdBy, popularity, isCompleted } = req.query;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -296,9 +335,9 @@ router.get('/', async (req, res) => {
       query.title = { $regex: title.trim(), $options: 'i' }; // Case-insensitive search
     }
     
-    // Filter by owner
-    if (owner) {
-      query.owner = owner;
+    // Filter by owner (createdBy is an alias for owner)
+    if (owner || createdBy) {
+      query.owner = owner || createdBy;
     }
     
     // Filter by privacy - exclude private challenges
@@ -347,8 +386,26 @@ router.get('/', async (req, res) => {
       });
     }
     
+    // Apply isCompleted filter
+    // If isCompleted is not sent, exclude completed challenges by default
+    // If isCompleted is 'true', include only completed challenges
+    // If isCompleted is 'false', exclude completed challenges
+    if (isCompleted !== undefined) {
+      const includeCompleted = isCompleted === 'true' || isCompleted === true;
+      allChallenges = allChallenges.filter(challenge => {
+        const completed = isChallengeCompleted(challenge, today);
+        return includeCompleted ? completed : !completed;
+      });
+    } else {
+      // Default behavior: exclude completed challenges if isCompleted is not specified
+      allChallenges = allChallenges.filter(challenge => {
+        return !isChallengeCompleted(challenge, today);
+      });
+    }
+    
     // Apply excludeFinished filter (if excludeFinished is true, filter out finished challenges)
-    if (excludeFinished === 'true' && !activity) {
+    // This is kept for backward compatibility but isCompleted takes precedence
+    if (excludeFinished === 'true' && !activity && isCompleted === undefined) {
       allChallenges = allChallenges.filter(challenge => {
         // Check if endDate is in the past
         if (challenge.endDate) {

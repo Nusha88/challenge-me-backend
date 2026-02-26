@@ -103,6 +103,96 @@ router.get('/users', async (req, res) => {
   }
 });
 
+// Get user by ID
+router.get('/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!User) {
+      console.error('User model is not defined');
+      return res.status(500).json({
+        message: 'Database model error',
+        error: 'User model not found'
+      });
+    }
+    
+    const user = await User.findById(id, {
+      name: 1,
+      email: 1,
+      avatarUrl: 1,
+      xp: 1,
+      createdAt: 1,
+      _id: 1,
+      dailyChecklists: 1
+    });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Get challenge count for the user (excluding private challenges)
+    const challengeCount = await Challenge.countDocuments({
+      $or: [
+        { owner: user._id },
+        { 'participants.userId': user._id }
+      ],
+      privacy: { $ne: 'private' }
+    });
+    
+    // Process checklist history (same logic as /daily-checklist/history)
+    const rawOffset = req.headers['x-client-tz-offset'];
+    const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
+
+    function toClientDayKey(date) {
+      const ms = new Date(date).getTime();
+      if (!Number.isFinite(ms)) return null;
+      // Convert UTC instant -> client's local clock by subtracting tzOffset minutes
+      const localMs = tzOffsetMin === null ? ms : (ms - tzOffsetMin * 60 * 1000);
+      const d = new Date(localMs);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(d.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    // Keep the most recent checklist per client day
+    const byDay = new Map();
+    for (const c of user.dailyChecklists || []) {
+      if (!c?.date) continue;
+      const key = toClientDayKey(c.date);
+      if (!key) continue;
+      const prev = byDay.get(key);
+      if (!prev || new Date(c.date) > new Date(prev.date)) {
+        byDay.set(key, c);
+      }
+    }
+
+    const checklistHistory = Array.from(byDay.entries()).map(([clientDay, checklist]) => ({
+      ...checklist.toObject?.() || checklist,
+      clientDay
+    }));
+
+    // Sort by clientDay descending
+    checklistHistory.sort((a, b) => (a.clientDay < b.clientDay ? 1 : a.clientDay > b.clientDay ? -1 : 0));
+    
+    const userObj = user.toObject();
+    userObj.challengeCount = challengeCount;
+    userObj.checklistHistory = checklistHistory;
+    
+    res.json({
+      message: 'User retrieved successfully',
+      user: userObj
+    });
+  } catch (error) {
+    console.error('Error in /users/:id endpoint:', error);
+    res.status(500).json({
+      message: 'Error fetching user',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
 // Register a new user
 router.post('/register', async (req, res) => {
   try {
