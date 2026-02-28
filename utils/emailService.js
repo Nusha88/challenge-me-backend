@@ -51,7 +51,7 @@ async function sendPasswordResetEmail(email, resetToken, userName = 'User', orig
     const { data, error } = await resend.emails.send({
       from: FROM_EMAIL,
       to: [email],
-      subject: 'Reset Your Password - ChallengeMe',
+      subject: 'Reset Your Password - Ignite',
       html: `
         <!DOCTYPE html>
         <html>
@@ -62,11 +62,11 @@ async function sendPasswordResetEmail(email, resetToken, userName = 'User', orig
         </head>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
           <div style="background: linear-gradient(135deg, #1FA0F6 0%, #A62EE8 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">ChallengeMe</h1>
+            <h1 style="color: white; margin: 0; font-size: 28px;">Ignite</h1>
           </div>
           <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
             <h2 style="color: #333; margin-top: 0;">Hello ${userName},</h2>
-            <p>We received a request to reset your password for your ChallengeMe account.</p>
+            <p>We received a request to reset your password for your Ignite account.</p>
             <p>Click the button below to reset your password:</p>
             <div style="text-align: center; margin: 30px 0;">
               <a href="${resetLink}" 
@@ -81,7 +81,7 @@ async function sendPasswordResetEmail(email, resetToken, userName = 'User', orig
             </p>
             <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
             <p style="font-size: 12px; color: #999; text-align: center;">
-              © ${new Date().getFullYear()} ChallengeMe. All rights reserved.
+              © ${new Date().getFullYear()} Ignite. All rights reserved.
             </p>
           </div>
         </body>
@@ -90,14 +90,14 @@ async function sendPasswordResetEmail(email, resetToken, userName = 'User', orig
       text: `
         Hello ${userName},
         
-        We received a request to reset your password for your ChallengeMe account.
+        We received a request to reset your password for your Ignite account.
         
         Click the following link to reset your password:
         ${resetLink}
         
         This link will expire in 1 hour. If you didn't request a password reset, please ignore this email.
         
-        © ${new Date().getFullYear()} ChallengeMe. All rights reserved.
+        © ${new Date().getFullYear()} Ignite. All rights reserved.
       `
     });
 
