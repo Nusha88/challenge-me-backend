@@ -115,4 +115,81 @@ router.get('/status', authenticateToken, async (req, res) => {
   }
 });
 
+router.get('/daily-recap-settings', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(
+      req.user.id,
+      'dailyRecapEnabled dailyRecapTime dailyRecapTimezone dailyRecapLanguage'
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      dailyRecapEnabled: !!user.dailyRecapEnabled,
+      dailyRecapTime: user.dailyRecapTime || '20:00',
+      dailyRecapTimezone: user.dailyRecapTimezone || 'UTC',
+      dailyRecapLanguage: user.dailyRecapLanguage || 'en'
+    });
+  } catch (error) {
+    console.error('[Push] Error getting daily recap settings:', error);
+    res.status(500).json({ message: 'Error getting daily recap settings', error: error.message });
+  }
+});
+
+router.put('/daily-recap-settings', authenticateToken, async (req, res) => {
+  try {
+    const {
+      dailyRecapEnabled,
+      dailyRecapTime,
+      dailyRecapTimezone,
+      dailyRecapLanguage
+    } = req.body || {};
+
+    if (dailyRecapEnabled !== undefined && typeof dailyRecapEnabled !== 'boolean') {
+      return res.status(400).json({ message: 'dailyRecapEnabled must be a boolean' });
+    }
+
+    if (dailyRecapTime !== undefined && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(String(dailyRecapTime))) {
+      return res.status(400).json({ message: 'dailyRecapTime must be in HH:mm format' });
+    }
+
+    if (dailyRecapLanguage !== undefined && !['ru', 'en'].includes(String(dailyRecapLanguage))) {
+      return res.status(400).json({ message: 'dailyRecapLanguage must be ru or en' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (dailyRecapEnabled !== undefined) {
+      user.dailyRecapEnabled = dailyRecapEnabled;
+    }
+    if (dailyRecapTime !== undefined) {
+      user.dailyRecapTime = String(dailyRecapTime);
+    }
+    if (dailyRecapTimezone !== undefined && String(dailyRecapTimezone).trim()) {
+      user.dailyRecapTimezone = String(dailyRecapTimezone).trim();
+    }
+    if (dailyRecapLanguage !== undefined) {
+      user.dailyRecapLanguage = String(dailyRecapLanguage);
+    }
+
+    await user.save();
+
+    res.json({
+      message: 'Daily recap settings updated',
+      dailyRecapEnabled: !!user.dailyRecapEnabled,
+      dailyRecapTime: user.dailyRecapTime || '20:00',
+      dailyRecapTimezone: user.dailyRecapTimezone || 'UTC',
+      dailyRecapLanguage: user.dailyRecapLanguage || 'en'
+    });
+  } catch (error) {
+    console.error('[Push] Error updating daily recap settings:', error);
+    res.status(500).json({ message: 'Error updating daily recap settings', error: error.message });
+  }
+});
+
 module.exports = router;

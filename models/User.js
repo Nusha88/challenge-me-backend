@@ -90,6 +90,27 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     },
     default: null
   },
+  dailyRecapEnabled: {
+    type: Boolean,
+    default: false
+  },
+  dailyRecapTime: {
+    type: String,
+    default: '20:00'
+  },
+  dailyRecapTimezone: {
+    type: String,
+    default: 'UTC'
+  },
+  dailyRecapLanguage: {
+    type: String,
+    enum: ['ru', 'en'],
+    default: 'en'
+  },
+  dailyRecapLastSentLocalDate: {
+    type: String,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now
