@@ -53,6 +53,7 @@ router.get('/users', async (req, res) => {
       name: 1,
       email: 1,
       avatarUrl: 1,
+      xp: 1,
       createdAt: 1,
       _id: 1
     }).sort({ createdAt: -1 });
