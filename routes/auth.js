@@ -213,20 +213,16 @@ router.post('/register', async (req, res) => {
         message: 'Password must be at least 6 characters'
       });
     }
-    // Check for duplicate name or email
-    const existingUser = await User.findOne({ $or: [{ name }, { email: email.trim().toLowerCase() }] });
+    // Check duplicate email only (name can be repeated)
+    const normalizedEmail = email.trim().toLowerCase();
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
-      if (existingUser.name === name) {
-        return res.status(409).json({ message: 'A user with this name already exists' });
-      }
-      if (existingUser.email === email.trim().toLowerCase()) {
-        return res.status(409).json({ message: 'A user with this email already exists' });
-      }
+      return res.status(409).json({ message: 'A user with this email already exists' });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({
       name,
-      email: email.trim().toLowerCase(),
+      email: normalizedEmail,
       avatarUrl: req.body.avatarUrl || '',
       password: hashedPassword,
       xp: 0
@@ -248,6 +244,9 @@ router.post('/register', async (req, res) => {
     });
   } catch (error) {
     console.error('Registration error:', error);
+    if (error?.code === 11000 && error?.keyPattern?.email) {
+      return res.status(409).json({ message: 'A user with this email already exists' });
+    }
     res.status(500).json({
       message: 'Error registering user',
       error: error.message

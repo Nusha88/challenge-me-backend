@@ -63,6 +63,8 @@ mongoose.connect(process.env.ATLAS_URI, {
   console.log('Connected to MongoDB Atlas');
   console.log('Database:', mongoose.connection.name);
   console.log('Host:', mongoose.connection.host);
+  // Legacy cleanup: name is no longer unique, so drop old unique index if it exists.
+  mongoose.connection.collection('users').dropIndex('name_1').catch(() => {});
   startDailyRecapScheduler();
 })
 .catch(err => {
