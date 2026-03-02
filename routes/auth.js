@@ -218,7 +218,7 @@ router.post('/register', async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
     const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
-      return res.status(409).json({ message: 'A user with this email already exists' });
+        return res.status(409).json({ message: 'A user with this email already exists' });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({
