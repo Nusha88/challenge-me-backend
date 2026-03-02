@@ -18,13 +18,15 @@ if (!process.env.ATLAS_URI) {
 
 const app = express();
 
+
 // CORS configuration
 const defaultAllowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:4173',
   'http://127.0.0.1:4173',
-  'http://localhost:3000'
+  'http://localhost:3000',
+  'https://ignite-me.app'
 ];
 
 const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || 'https://ignite-me.app')
