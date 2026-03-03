@@ -127,6 +127,16 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
+    // Load existing challenge first to compare actions for result-type quests
+    const existingChallenge = await Challenge.findById(id);
+
+    if (!existingChallenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const prevActions = Array.isArray(existingChallenge.actions) ? existingChallenge.actions : [];
+    const effectiveOwnerId = owner || existingChallenge.owner;
+
     const update = { title, description: description || '', startDate, endDate };
     if (owner) {
       update.owner = owner;
@@ -153,20 +163,20 @@ router.put('/:id', async (req, res) => {
     if (allowComments !== undefined) {
       update.allowComments = allowComments;
     }
-    const challenge = await Challenge.findByIdAndUpdate(id, update, {
-      new: true,
-      runValidators: true
-    });
-
-    if (!challenge) {
-      return res.status(404).json({ message: 'Challenge not found' });
-    }
+    const challenge = await Challenge.findByIdAndUpdate(
+      id,
+      update,
+      {
+        new: true,
+        runValidators: true
+      }
+    );
 
     // Handle owner's completedDays - save to their participant entry
-    if (challengeType === 'habit' && completedDays !== undefined && owner) {
+    if (challengeType === 'habit' && completedDays !== undefined && effectiveOwnerId) {
       // Find owner's participant entry
       const ownerIndex = challenge.participants.findIndex(
-        p => p.userId && p.userId.toString() === owner.toString()
+        p => p.userId && p.userId.toString() === effectiveOwnerId.toString()
       );
       
       if (ownerIndex !== -1) {
@@ -174,10 +184,117 @@ router.put('/:id', async (req, res) => {
         challenge.participants[ownerIndex].completedDays = Array.isArray(completedDays) ? completedDays : [];
       } else {
         // If owner is not in participants, add them
-        challenge.participants.push({ userId: owner, completedDays: Array.isArray(completedDays) ? completedDays : [] });
+        challenge.participants.push({ userId: effectiveOwnerId, completedDays: Array.isArray(completedDays) ? completedDays : [] });
       }
       
       await challenge.save();
+    }
+
+    // For result-type quests: add newly completed actions to owner's daily checklist
+    if (challengeType === 'result' && Array.isArray(actions) && effectiveOwnerId) {
+      try {
+        const newlyCompletedActionTexts = [];
+
+        const safePrev = Array.isArray(prevActions) ? prevActions : [];
+        const safeNew = Array.isArray(actions) ? actions : [];
+
+        for (let i = 0; i < safeNew.length; i++) {
+          const newAction = safeNew[i] || {};
+          const prevAction = safePrev[i] || {};
+
+          const prevChecked = Boolean(prevAction.checked);
+          const newChecked = Boolean(newAction.checked);
+
+          if (!prevChecked && newChecked && newAction.text) {
+            newlyCompletedActionTexts.push(String(newAction.text).trim());
+          }
+
+          const newChildren = Array.isArray(newAction.children) ? newAction.children : [];
+          const prevChildren = Array.isArray(prevAction.children) ? prevAction.children : [];
+
+          for (let j = 0; j < newChildren.length; j++) {
+            const newChild = newChildren[j] || {};
+            const prevChild = prevChildren[j] || {};
+
+            const prevChildChecked = Boolean(prevChild.checked);
+            const newChildChecked = Boolean(newChild.checked);
+
+            if (!prevChildChecked && newChildChecked && newChild.text) {
+              newlyCompletedActionTexts.push(String(newChild.text).trim());
+            }
+          }
+        }
+
+        const ownerUser = await User.findById(effectiveOwnerId);
+        if (ownerUser) {
+          const todayStr = new Date().toISOString().slice(0, 10);
+
+          let todayChecklist = ownerUser.dailyChecklists.find((checklist) => {
+            if (!checklist.date) return false;
+            const date = new Date(checklist.date);
+            return date.toISOString().slice(0, 10) === todayStr;
+          });
+
+          // Fallback: if there is no checklist (or it is empty) and nothing was newly completed,
+          // seed today's checklist from all currently checked quest actions.
+          if (
+            newlyCompletedActionTexts.length === 0 &&
+            (!todayChecklist || !Array.isArray(todayChecklist.tasks) || todayChecklist.tasks.length === 0)
+          ) {
+            const seedTexts = [];
+            const currentActions = Array.isArray(actions) ? actions : [];
+
+            for (const action of currentActions) {
+              if (action && action.checked && action.text) {
+                seedTexts.push(String(action.text).trim());
+              }
+              const children = Array.isArray(action?.children) ? action.children : [];
+              for (const child of children) {
+                if (child && child.checked && child.text) {
+                  seedTexts.push(String(child.text).trim());
+                }
+              }
+            }
+
+            if (seedTexts.length > 0) {
+              newlyCompletedActionTexts.push(...seedTexts);
+            }
+          }
+
+          if (newlyCompletedActionTexts.length > 0) {
+            if (!todayChecklist) {
+              todayChecklist = {
+                date: new Date(),
+                tasks: []
+              };
+              ownerUser.dailyChecklists.push(todayChecklist);
+            }
+
+            const tasksArray = Array.isArray(todayChecklist.tasks) ? todayChecklist.tasks : [];
+            const existingTitles = new Set(
+              tasksArray
+                .filter((t) => t && typeof t.title === 'string')
+                .map((t) => t.title.trim())
+            );
+
+            for (const text of newlyCompletedActionTexts) {
+              if (!text) continue;
+              if (existingTitles.has(text)) continue;
+
+              tasksArray.push({
+                title: text,
+                done: true
+              });
+              existingTitles.add(text);
+            }
+
+            todayChecklist.tasks = tasksArray;
+            await ownerUser.save();
+          }
+        }
+      } catch (e) {
+        console.error('Error adding quest actions to daily checklist:', e);
+      }
     }
 
     res.json({
