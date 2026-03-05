@@ -87,6 +87,7 @@ router.get('/users', async (req, res) => {
     res.json({
       message: 'Users retrieved successfully',
       users: paginatedUsers,
+      totalUsers: totalUsers,
       pagination: {
         page,
         limit,
