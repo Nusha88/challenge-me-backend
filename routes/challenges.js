@@ -2,10 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Challenge = require('../models/Challenge');
 const User = require('../models/User');
-
-function getTodayUtcString() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
-}
+const { getClientDayRange, findLatestChecklistInRange } = require('../utils/dateHelpers');
 
 function decodeOptionalAuthUserId(req) {
   const authHeader = req.headers['authorization'];
@@ -188,113 +185,6 @@ router.put('/:id', async (req, res) => {
       }
       
       await challenge.save();
-    }
-
-    // For result-type quests: add newly completed actions to owner's daily checklist
-    if (challengeType === 'result' && Array.isArray(actions) && effectiveOwnerId) {
-      try {
-        const newlyCompletedActionTexts = [];
-
-        const safePrev = Array.isArray(prevActions) ? prevActions : [];
-        const safeNew = Array.isArray(actions) ? actions : [];
-
-        for (let i = 0; i < safeNew.length; i++) {
-          const newAction = safeNew[i] || {};
-          const prevAction = safePrev[i] || {};
-
-          const prevChecked = Boolean(prevAction.checked);
-          const newChecked = Boolean(newAction.checked);
-
-          if (!prevChecked && newChecked && newAction.text) {
-            newlyCompletedActionTexts.push(String(newAction.text).trim());
-          }
-
-          const newChildren = Array.isArray(newAction.children) ? newAction.children : [];
-          const prevChildren = Array.isArray(prevAction.children) ? prevAction.children : [];
-
-          for (let j = 0; j < newChildren.length; j++) {
-            const newChild = newChildren[j] || {};
-            const prevChild = prevChildren[j] || {};
-
-            const prevChildChecked = Boolean(prevChild.checked);
-            const newChildChecked = Boolean(newChild.checked);
-
-            if (!prevChildChecked && newChildChecked && newChild.text) {
-              newlyCompletedActionTexts.push(String(newChild.text).trim());
-            }
-          }
-        }
-
-        const ownerUser = await User.findById(effectiveOwnerId);
-        if (ownerUser) {
-          const todayStr = new Date().toISOString().slice(0, 10);
-
-          let todayChecklist = ownerUser.dailyChecklists.find((checklist) => {
-            if (!checklist.date) return false;
-            const date = new Date(checklist.date);
-            return date.toISOString().slice(0, 10) === todayStr;
-          });
-
-          // Fallback: if there is no checklist (or it is empty) and nothing was newly completed,
-          // seed today's checklist from all currently checked quest actions.
-          if (
-            newlyCompletedActionTexts.length === 0 &&
-            (!todayChecklist || !Array.isArray(todayChecklist.tasks) || todayChecklist.tasks.length === 0)
-          ) {
-            const seedTexts = [];
-            const currentActions = Array.isArray(actions) ? actions : [];
-
-            for (const action of currentActions) {
-              if (action && action.checked && action.text) {
-                seedTexts.push(String(action.text).trim());
-              }
-              const children = Array.isArray(action?.children) ? action.children : [];
-              for (const child of children) {
-                if (child && child.checked && child.text) {
-                  seedTexts.push(String(child.text).trim());
-                }
-              }
-            }
-
-            if (seedTexts.length > 0) {
-              newlyCompletedActionTexts.push(...seedTexts);
-            }
-          }
-
-          if (newlyCompletedActionTexts.length > 0) {
-            if (!todayChecklist) {
-              todayChecklist = {
-                date: new Date(),
-                tasks: []
-              };
-              ownerUser.dailyChecklists.push(todayChecklist);
-            }
-
-            const tasksArray = Array.isArray(todayChecklist.tasks) ? todayChecklist.tasks : [];
-            const existingTitles = new Set(
-              tasksArray
-                .filter((t) => t && typeof t.title === 'string')
-                .map((t) => t.title.trim())
-            );
-
-            for (const text of newlyCompletedActionTexts) {
-              if (!text) continue;
-              if (existingTitles.has(text)) continue;
-
-              tasksArray.push({
-                title: text,
-                done: true
-              });
-              existingTitles.add(text);
-            }
-
-            todayChecklist.tasks = tasksArray;
-            await ownerUser.save();
-          }
-        }
-      } catch (e) {
-        console.error('Error adding quest actions to daily checklist:', e);
-      }
     }
 
     res.json({

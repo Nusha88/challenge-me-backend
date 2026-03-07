@@ -6,6 +6,13 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { sendPasswordResetEmail } = require('../utils/emailService');
 
+const { 
+  getClientDayRange, 
+  toClientDayKey, 
+  findLatestChecklistInRange, 
+  serializeChecklistForClientDay 
+} = require('../utils/dateHelpers');
+
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
 // JWT middleware (for future use)
@@ -145,23 +152,11 @@ router.get('/users/:id', async (req, res) => {
     const rawOffset = req.headers['x-client-tz-offset'];
     const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
 
-    function toClientDayKey(date) {
-      const ms = new Date(date).getTime();
-      if (!Number.isFinite(ms)) return null;
-      // Convert UTC instant -> client's local clock by subtracting tzOffset minutes
-      const localMs = tzOffsetMin === null ? ms : (ms - tzOffsetMin * 60 * 1000);
-      const d = new Date(localMs);
-      const y = d.getUTCFullYear();
-      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-      const day = String(d.getUTCDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    }
-
     // Keep the most recent checklist per client day
     const byDay = new Map();
     for (const c of user.dailyChecklists || []) {
       if (!c?.date) continue;
-      const key = toClientDayKey(c.date);
+      const key = toClientDayKey(c.date, tzOffsetMin);
       if (!key) continue;
       const prev = byDay.get(key);
       if (!prev || new Date(c.date) > new Date(prev.date)) {
@@ -499,59 +494,15 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Use client-local day when provided to avoid timezone bugs (yesterday showing as today).
-    // Headers:
-    // - x-client-day: "YYYY-MM-DD" in the CLIENT'S local calendar
-    // - x-client-tz-offset: minutes from UTC (Date.getTimezoneOffset())
-    function getClientDayRange(dayOffset = 0) {
-      const rawDay = req.headers['x-client-day'];
-      const rawOffset = req.headers['x-client-tz-offset'];
-      const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
-      const dayStr = typeof rawDay === 'string' ? rawDay : null;
+    const { startUtc: todayStartUtc, endUtc: todayEndUtc, clientDayStr: todayStr } = getClientDayRange(req, 0);
 
-      // Fallback: old behavior (UTC day)
-      if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr) || tzOffsetMin === null) {
-        const startUtc = new Date();
-        startUtc.setUTCHours(0, 0, 0, 0);
-        startUtc.setUTCMilliseconds(0);
-        startUtc.setUTCDate(startUtc.getUTCDate() + dayOffset);
-        const endUtc = new Date(startUtc);
-        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
-        return { startUtc, endUtc };
-      }
-
-      const [y, m, d] = dayStr.split('-').map(Number);
-      // local midnight -> UTC = Date.UTC(...) + tzOffsetMin minutes
-      const startMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) + tzOffsetMin * 60 * 1000;
-      const startUtc = new Date(startMs);
-      const endUtc = new Date(startMs + 24 * 60 * 60 * 1000);
-      // Apply dayOffset in local-day units
-      if (dayOffset !== 0) {
-        startUtc.setTime(startUtc.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-        endUtc.setTime(endUtc.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-      }
-      return { startUtc, endUtc };
-    }
-
-    const { startUtc: todayStartUtc, endUtc: todayEndUtc } = getClientDayRange(0);
-
-    // Find checklist for today - use a range to handle timezone differences
-    // Check if checklist date falls within client's "today" window in UTC
-    const todayChecklists = user.dailyChecklists.filter(checklist => {
-      if (!checklist.date) return false;
-      
-      const checklistDate = new Date(checklist.date);
-      const t = checklistDate.getTime();
-      return t >= todayStartUtc.getTime() && t < todayEndUtc.getTime();
-    });
-
-    // Return the most recent one if multiple exist (shouldn't happen after fix, but handle gracefully)
-    let todayChecklist = todayChecklists.length > 0 
-      ? todayChecklists.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
-      : null;
+    // Find checklist for today using the helper
+    const todayChecklist = findLatestChecklistInRange(user.dailyChecklists, todayStartUtc, todayEndUtc);
 
     if (todayChecklist) {
-      res.json({ checklist: todayChecklist });
+      res.json({ 
+        checklist: serializeChecklistForClientDay(todayChecklist, todayStr)
+      });
     } else {
       res.json({ checklist: null });
     }
@@ -575,43 +526,10 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Use client-local day when provided to avoid timezone bugs.
-    function getClientDayRange(dayOffset = 0) {
-      const rawDay = req.headers['x-client-day'];
-      const rawOffset = req.headers['x-client-tz-offset'];
-      const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
-      const dayStr = typeof rawDay === 'string' ? rawDay : null;
+    const { startUtc: todayStartUtc, endUtc: todayEndUtc, clientDayStr: todayStr } = getClientDayRange(req, 0);
 
-      // Fallback: old behavior (UTC day)
-      if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr) || tzOffsetMin === null) {
-        const startUtc = new Date();
-        startUtc.setUTCHours(0, 0, 0, 0);
-        startUtc.setUTCMilliseconds(0);
-        startUtc.setUTCDate(startUtc.getUTCDate() + dayOffset);
-        const endUtc = new Date(startUtc);
-        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
-        return { startUtc, endUtc };
-      }
-
-      const [y, m, d] = dayStr.split('-').map(Number);
-      const startMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) + tzOffsetMin * 60 * 1000;
-      const startUtc = new Date(startMs);
-      const endUtc = new Date(startMs + 24 * 60 * 60 * 1000);
-      if (dayOffset !== 0) {
-        startUtc.setTime(startUtc.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-        endUtc.setTime(endUtc.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-      }
-      return { startUtc, endUtc };
-    }
-
-    const { startUtc: todayStartUtc, endUtc: todayEndUtc } = getClientDayRange(0);
-
-    // Find today's existing checklist (if any) to award XP for newly completed tasks
-    const existingTodayChecklist = user.dailyChecklists.find(checklist => {
-      if (!checklist.date) return false;
-      const t = new Date(checklist.date).getTime();
-      return t >= todayStartUtc.getTime() && t < todayEndUtc.getTime();
-    });
+    // Find today's existing checklist (if any) using the helper
+    const existingTodayChecklist = findLatestChecklistInRange(user.dailyChecklists, todayStartUtc, todayEndUtc);
 
     const prevDoneCount = existingTodayChecklist?.tasks
       ? existingTodayChecklist.tasks.filter(t => t && t.done).length
@@ -647,20 +565,11 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     
     // Calculate current streak
     let currentStreak = 0;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
     
     // Helper function to check if a day was completed
-    const checkDayCompletion = (date) => {
-      const dateStr = date.toISOString().slice(0, 10);
-      
-      // Check checklist
-      const checklistForDate = user.dailyChecklists.find(c => {
-        if (!c.date) return false;
-        const checklistDate = new Date(c.date);
-        checklistDate.setHours(0, 0, 0, 0);
-        return checklistDate.getTime() === date.getTime();
-      });
+    const checkDayCompletion = (startUtc, endUtc, dateStr) => {
+      // Check checklist using the helper
+      const checklistForDate = findLatestChecklistInRange(user.dailyChecklists, startUtc, endUtc);
       
       const hasCompletedChecklistTask = checklistForDate && checklistForDate.tasks && checklistForDate.tasks.length > 0
         ? checklistForDate.tasks.some(task => task.done === true)
@@ -698,15 +607,15 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     };
     
     // Calculate streak starting from today
-    let checkDate = new Date(today);
     for (let i = 0; i < 365; i++) {
-      if (checkDayCompletion(checkDate)) {
+      const { startUtc, endUtc, clientDayStr } = getClientDayRange(req, -i);
+      if (checkDayCompletion(startUtc, endUtc, clientDayStr)) {
         currentStreak++;
       } else {
+        // If it's today and not completed yet, streak might still be alive if yesterday was completed
+        if (i === 0) continue;
         break;
       }
-      checkDate.setDate(checkDate.getDate() - 1);
-      checkDate.setHours(0, 0, 0, 0);
     }
     
     // Award +50 XP for 7-day streak milestone if not already awarded
@@ -727,7 +636,7 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
 
     res.json({ 
       message: 'Checklist updated successfully',
-      checklist: updatedChecklist,
+      checklist: serializeChecklistForClientDay(updatedChecklist, todayStr),
       xpGained,
       xp: updatedUser.xp || 0,
       user: {
@@ -757,23 +666,11 @@ router.get('/daily-checklist/history', authenticateToken, async (req, res) => {
     const rawOffset = req.headers['x-client-tz-offset'];
     const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
 
-    function toClientDayKey(date) {
-      const ms = new Date(date).getTime();
-      if (!Number.isFinite(ms)) return null;
-      // Convert UTC instant -> client's local clock by subtracting tzOffset minutes
-      const localMs = tzOffsetMin === null ? ms : (ms - tzOffsetMin * 60 * 1000);
-      const d = new Date(localMs);
-      const y = d.getUTCFullYear();
-      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-      const day = String(d.getUTCDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    }
-
     // Keep the most recent checklist per client day
     const byDay = new Map();
     for (const c of user.dailyChecklists || []) {
       if (!c?.date) continue;
-      const key = toClientDayKey(c.date);
+      const key = toClientDayKey(c.date, tzOffsetMin);
       if (!key) continue;
       const prev = byDay.get(key);
       if (!prev || new Date(c.date) > new Date(prev.date)) {
@@ -781,10 +678,9 @@ router.get('/daily-checklist/history', authenticateToken, async (req, res) => {
       }
     }
 
-    const grouped = Array.from(byDay.entries()).map(([clientDay, checklist]) => ({
-      ...checklist.toObject?.() || checklist,
-      clientDay
-    }));
+    const grouped = Array.from(byDay.entries()).map(([clientDay, checklist]) => 
+      serializeChecklistForClientDay(checklist, clientDay)
+    );
 
     // Sort by clientDay descending
     grouped.sort((a, b) => (a.clientDay < b.clientDay ? 1 : a.clientDay > b.clientDay ? -1 : 0));
@@ -804,46 +700,15 @@ router.get('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Use client-local day when provided (tomorrow = client today + 1)
-    function getClientDayRange(dayOffset = 0) {
-      const rawDay = req.headers['x-client-day'];
-      const rawOffset = req.headers['x-client-tz-offset'];
-      const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
-      const dayStr = typeof rawDay === 'string' ? rawDay : null;
+    const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc, clientDayStr: tomorrowStr } = getClientDayRange(req, 1);
 
-      if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr) || tzOffsetMin === null) {
-        const startUtc = new Date();
-        startUtc.setUTCHours(0, 0, 0, 0);
-        startUtc.setUTCMilliseconds(0);
-        startUtc.setUTCDate(startUtc.getUTCDate() + dayOffset);
-        const endUtc = new Date(startUtc);
-        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
-        return { startUtc, endUtc };
-      }
-
-      const [y, m, d] = dayStr.split('-').map(Number);
-      const baseStartMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) + tzOffsetMin * 60 * 1000;
-      const startMs = baseStartMs + dayOffset * 24 * 60 * 60 * 1000;
-      const startUtc = new Date(startMs);
-      const endUtc = new Date(startMs + 24 * 60 * 60 * 1000);
-      return { startUtc, endUtc };
-    }
-
-    const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc } = getClientDayRange(1);
-
-    // Find checklist for tomorrow
-    const tomorrowChecklists = user.dailyChecklists.filter(checklist => {
-      if (!checklist.date) return false;
-      const t = new Date(checklist.date).getTime();
-      return t >= tomorrowStartUtc.getTime() && t < tomorrowEndUtc.getTime();
-    });
-
-    const tomorrowChecklist = tomorrowChecklists.length > 0
-      ? tomorrowChecklists[tomorrowChecklists.length - 1]
-      : null;
+    // Find checklist for tomorrow using the helper
+    const tomorrowChecklist = findLatestChecklistInRange(user.dailyChecklists, tomorrowStartUtc, tomorrowEndUtc);
 
     if (tomorrowChecklist) {
-      res.json({ checklist: tomorrowChecklist });
+      res.json({ 
+        checklist: serializeChecklistForClientDay(tomorrowChecklist, tomorrowStr)
+      });
     } else {
       res.json({ checklist: null });
     }
@@ -867,32 +732,7 @@ router.put('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Use client-local day when provided (tomorrow = client today + 1)
-    function getClientDayRange(dayOffset = 0) {
-      const rawDay = req.headers['x-client-day'];
-      const rawOffset = req.headers['x-client-tz-offset'];
-      const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
-      const dayStr = typeof rawDay === 'string' ? rawDay : null;
-
-      if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr) || tzOffsetMin === null) {
-        const startUtc = new Date();
-        startUtc.setUTCHours(0, 0, 0, 0);
-        startUtc.setUTCMilliseconds(0);
-        startUtc.setUTCDate(startUtc.getUTCDate() + dayOffset);
-        const endUtc = new Date(startUtc);
-        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
-        return { startUtc, endUtc };
-      }
-
-      const [y, m, d] = dayStr.split('-').map(Number);
-      const baseStartMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) + tzOffsetMin * 60 * 1000;
-      const startMs = baseStartMs + dayOffset * 24 * 60 * 60 * 1000;
-      const startUtc = new Date(startMs);
-      const endUtc = new Date(startMs + 24 * 60 * 60 * 1000);
-      return { startUtc, endUtc };
-    }
-
-    const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc } = getClientDayRange(1);
+    const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc } = getClientDayRange(req, 1);
 
     // Remove any duplicate checklists for tomorrow
     const checklistsToKeep = user.dailyChecklists.filter(checklist => {
@@ -911,16 +751,13 @@ router.put('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
     user.dailyChecklists = checklistsToKeep;
     const updatedUser = await user.save();
 
-    // Find and return the checklist we just created
-    const updatedChecklist = updatedUser.dailyChecklists.find(checklist => {
-      if (!checklist.date) return false;
-      const t = new Date(checklist.date).getTime();
-      return t >= tomorrowStartUtc.getTime() && t < tomorrowEndUtc.getTime();
-    });
+    // Find and return the checklist we just created using the helper
+    const updatedChecklist = findLatestChecklistInRange(updatedUser.dailyChecklists, tomorrowStartUtc, tomorrowEndUtc);
+    const { clientDayStr: tomorrowStr } = getClientDayRange(req, 1);
 
     res.json({ 
       message: 'Tomorrow\'s checklist updated successfully',
-      checklist: updatedChecklist,
+      checklist: serializeChecklistForClientDay(updatedChecklist, tomorrowStr),
       user: {
         id: updatedUser._id,
         name: updatedUser.name,
