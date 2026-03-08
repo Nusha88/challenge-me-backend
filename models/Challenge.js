@@ -42,6 +42,10 @@ const challengeSchema = new mongoose.Schema(
     },
     actions: [
       {
+        _id: {
+          type: mongoose.Schema.Types.ObjectId,
+          auto: true
+        },
         text: {
           type: String,
           default: ''
@@ -53,6 +57,10 @@ const challengeSchema = new mongoose.Schema(
         children: {
           type: [
             {
+              _id: {
+                type: mongoose.Schema.Types.ObjectId,
+                auto: true
+              },
               text: {
                 type: String,
                 default: ''
@@ -74,6 +82,11 @@ const challengeSchema = new mongoose.Schema(
     endDate: {
       type: Date,
       required: true
+    },
+    difficulty: {
+      type: String,
+      enum: ['easy', 'medium', 'hard'],
+      default: 'medium'
     },
     owner: {
       type: mongoose.Schema.Types.ObjectId,

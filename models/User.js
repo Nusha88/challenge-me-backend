@@ -110,6 +110,11 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: String,
     default: null
   },
+  // Track which result action items have awarded XP (string format: challengeId:actionId)
+  awardedActionIds: {
+    type: [String],
+    default: []
+  },
   createdAt: {
     type: Date,
     default: Date.now
