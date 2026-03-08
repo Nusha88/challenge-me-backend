@@ -1,7 +1,7 @@
 const { Resend } = require('resend');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@resend.dev';
+const FROM_EMAIL = process.env.FROM_EMAIL || 'Ignite <noreply@ignite-me.app>';
 const PRODUCTION_FRONTEND_URL = process.env.FRONTEND_URL || 'https://playful-fudge-afc8e6.netlify.app';
 const LOCAL_FRONTEND_URL = 'http://localhost:5173';
 
