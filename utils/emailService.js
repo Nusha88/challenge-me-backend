@@ -2,7 +2,7 @@ const { Resend } = require('resend');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'Ignite <noreply@ignite-me.app>';
-const PRODUCTION_FRONTEND_URL = process.env.FRONTEND_URL || 'https://playful-fudge-afc8e6.netlify.app';
+const PRODUCTION_FRONTEND_URL = process.env.FRONTEND_URL || 'https://ignite-me.app';
 const LOCAL_FRONTEND_URL = 'http://localhost:5173';
 
 if (!RESEND_API_KEY) {
@@ -17,7 +17,6 @@ const resend = new Resend(RESEND_API_KEY);
  * @returns {string} Frontend URL
  */
 function getFrontendUrl(origin) {
-  // If FRONTEND_URL is explicitly set, use it
   if (process.env.FRONTEND_URL) {
     return process.env.FRONTEND_URL;
   }
@@ -31,7 +30,6 @@ function getFrontendUrl(origin) {
     return LOCAL_FRONTEND_URL;
   }
   
-  // Default to production URL for remote requests
   return PRODUCTION_FRONTEND_URL;
 }
 
