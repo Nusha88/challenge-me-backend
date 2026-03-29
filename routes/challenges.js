@@ -74,7 +74,7 @@ function isChallengeCompleted(challenge, today) {
 // Create challenge
 router.post('/', async (req, res) => {
   try {
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments, difficulty } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments, difficulty, reward } = req.body;
 
     if (!title || !startDate || !endDate || !owner) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -108,6 +108,9 @@ router.post('/', async (req, res) => {
     }
     if (actions && challengeType === 'result') {
       challengeData.actions = actions;
+    }
+    if (challengeType === 'result') {
+      challengeData.reward = typeof reward === 'string' ? reward.trim() : '';
     }
     if (completedDays && challengeType === 'habit') {
       challengeData.completedDays = completedDays;
@@ -260,7 +263,7 @@ router.patch('/:id/actions', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments, difficulty } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments, difficulty, reward } = req.body;
 
     if (!title || !startDate || !endDate) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -318,6 +321,11 @@ router.put('/:id', async (req, res) => {
     
     if (allowComments !== undefined) {
       update.allowComments = allowComments;
+    }
+
+    const effectiveType = challengeType !== undefined ? challengeType : existingChallenge.challengeType;
+    if (effectiveType === 'result' && reward !== undefined) {
+      update.reward = typeof reward === 'string' ? reward.trim() : '';
     }
 
     const prevActions = JSON.parse(JSON.stringify(existingChallenge.actions || []));

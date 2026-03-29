@@ -88,6 +88,12 @@ const challengeSchema = new mongoose.Schema(
       enum: ['easy', 'medium', 'hard'],
       default: 'medium'
     },
+    reward: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 500
+    },
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
