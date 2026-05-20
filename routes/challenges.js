@@ -825,13 +825,14 @@ router.get('/', async (req, res) => {
     // If isCompleted is not sent, exclude completed challenges by default
     // If isCompleted is 'true', include only completed challenges
     // If isCompleted is 'false', exclude completed challenges
-    if (isCompleted !== undefined) {
+    // If isCompleted is 'all', include both active and completed
+    if (isCompleted !== undefined && isCompleted !== 'all') {
       const includeCompleted = isCompleted === 'true' || isCompleted === true;
       allChallenges = allChallenges.filter(challenge => {
         const completed = isChallengeCompleted(challenge, today);
         return includeCompleted ? completed : !completed;
       });
-    } else {
+    } else if (isCompleted === undefined) {
       // Default behavior: exclude completed challenges if isCompleted is not specified
       allChallenges = allChallenges.filter(challenge => {
         return !isChallengeCompleted(challenge, today);
