@@ -85,7 +85,7 @@ const challengeSchema = new mongoose.Schema(
     },
     difficulty: {
       type: String,
-      enum: ['easy', 'medium', 'hard'],
+      enum: ['easy', 'medium', 'heroic'],
       default: 'medium'
     },
     reward: {

@@ -8,6 +8,7 @@ const {
   calculateResultProgressXp,
   getResultCompletionXp
 } = require('../utils/challengeHelpers');
+const { getLocalizedCommentPush } = require('../utils/notificationMessages');
 
 function getTodayUtcString() {
   const d = new Date();
@@ -30,6 +31,183 @@ function decodeOptionalAuthUserId(req) {
   } catch {
     return null;
   }
+}
+
+/** In-app + push notification for diary activity (owner comment or @mention in reply). */
+async function notifyChallengeCommentRecipient({
+  recipientUserId,
+  fromUserId,
+  challenge,
+  type,
+  commentId,
+  replyId = null
+}) {
+  if (!recipientUserId || !fromUserId || !challenge) return;
+  if (recipientUserId.toString() === fromUserId.toString()) return;
+
+  const Notification = require('../models/Notification');
+  const { sendPushNotification } = require('../utils/pushService');
+
+  try {
+    const notification = await Notification.create({
+      userId: recipientUserId,
+      type,
+      challengeId: challenge._id,
+      commentId: commentId || null,
+      replyId: replyId || null,
+      fromUserId,
+      read: false
+    });
+
+    const [fromUser, recipientUser] = await Promise.all([
+      User.findById(fromUserId).select('name'),
+      User.findById(recipientUserId).select('dailyRecapLanguage')
+    ]);
+    const fromName = fromUser?.name;
+    const missionTitle = challenge.title;
+    const isReplyToUser = type === 'mention' || replyId != null;
+    const { title: pushTitle, body: pushBody } = getLocalizedCommentPush(
+      type,
+      fromName,
+      missionTitle,
+      recipientUser?.dailyRecapLanguage,
+      isReplyToUser
+    );
+
+    await sendPushNotification(recipientUserId, {
+      title: pushTitle,
+      body: pushBody,
+      data: {
+        notificationId: notification._id.toString(),
+        challengeId: challenge._id.toString(),
+        type
+      },
+      tag: `challenge-${challenge._id}`
+    });
+  } catch (notificationError) {
+    console.error('Error creating comment/mention notification:', notificationError);
+  }
+}
+
+function flattenResultActionStates(actions) {
+  const map = new Map();
+  if (!Array.isArray(actions)) return map;
+  for (const a of actions) {
+    const id = a._id != null ? String(a._id) : null;
+    if (id) {
+      map.set(id, {
+        checked: !!a.checked,
+        text: typeof a.text === 'string' ? a.text.trim() : ''
+      });
+    }
+    if (Array.isArray(a.children)) {
+      for (const c of a.children) {
+        const cid = c._id != null ? String(c._id) : null;
+        if (cid) {
+          map.set(cid, {
+            checked: !!c.checked,
+            text: typeof c.text === 'string' ? c.text.trim() : ''
+          });
+        }
+      }
+    }
+  }
+  return map;
+}
+
+function diffResultActionCheckStates(prevActions, nextActions) {
+  const prevMap = flattenResultActionStates(prevActions);
+  const nextMap = flattenResultActionStates(nextActions);
+  const newlyChecked = [];
+  const newlyUnchecked = [];
+  for (const [id, next] of nextMap) {
+    const prev = prevMap.get(id);
+    const wasChecked = prev ? prev.checked : false;
+    if (next.checked && !wasChecked) {
+      newlyChecked.push({ id, text: next.text });
+    }
+    if (!next.checked && wasChecked) {
+      newlyUnchecked.push({ id });
+    }
+  }
+  return { newlyChecked, newlyUnchecked };
+}
+
+function taskMatchesResultActionSource(task, challengeId, actionId) {
+  const s = task.source;
+  if (!s || s.kind !== 'resultAction') return false;
+  const cid = s.challengeId != null ? String(s.challengeId) : '';
+  return cid === String(challengeId) && String(s.actionId) === String(actionId);
+}
+
+function syncTodayChecklistForResultActions(user, req, challenge, prevActions, nextActions) {
+  if (challenge.challengeType !== 'result') return;
+  const { newlyChecked, newlyUnchecked } = diffResultActionCheckStates(prevActions, nextActions);
+  if (newlyChecked.length === 0 && newlyUnchecked.length === 0) return;
+
+  const { startUtc: todayStartUtc, endUtc: todayEndUtc } = getClientDayRange(req, 0);
+  const challengeId = challenge._id;
+  const missionTitle = (challenge.title && String(challenge.title).trim()) || 'Mission';
+
+  const existingTodayChecklist = findLatestChecklistInRange(user.dailyChecklists || [], todayStartUtc, todayEndUtc);
+
+  const checklistsToKeep = (user.dailyChecklists || []).filter(checklist => {
+    if (!checklist.date) return true;
+    const t = new Date(checklist.date).getTime();
+    return !(t >= todayStartUtc.getTime() && t < todayEndUtc.getTime());
+  });
+
+  const tasks = [];
+  if (existingTodayChecklist && Array.isArray(existingTodayChecklist.tasks)) {
+    for (const t of existingTodayChecklist.tasks) {
+      const plain = t.toObject ? t.toObject() : { ...t };
+      const task = {
+        title: plain.title,
+        done: !!plain.done
+      };
+      if (plain.source && plain.source.kind) {
+        task.source = {
+          kind: plain.source.kind,
+          challengeId: plain.source.challengeId,
+          actionId: plain.source.actionId != null ? String(plain.source.actionId) : undefined
+        };
+      }
+      tasks.push(task);
+    }
+  }
+
+  for (const { id } of newlyUnchecked) {
+    const idx = tasks.findIndex(task => taskMatchesResultActionSource(task, challengeId, id));
+    if (idx >= 0) tasks.splice(idx, 1);
+  }
+
+  for (const { id, text } of newlyChecked) {
+    const actionLabel = text || '';
+    const title = `${missionTitle}: ${actionLabel}`;
+    const idx = tasks.findIndex(task => taskMatchesResultActionSource(task, challengeId, id));
+    if (idx >= 0) {
+      tasks[idx].title = title;
+      tasks[idx].done = true;
+    } else {
+      tasks.push({
+        title,
+        done: true,
+        source: {
+          kind: 'resultAction',
+          challengeId,
+          actionId: id
+        }
+      });
+    }
+  }
+
+  checklistsToKeep.push({
+    date: todayStartUtc,
+    tasks
+  });
+
+  user.dailyChecklists = checklistsToKeep;
+  user.markModified('dailyChecklists');
 }
 
 function isChallengeCompleted(challenge, today) {
@@ -244,6 +422,18 @@ router.patch('/:id/actions', async (req, res) => {
         userUpdate,
         { new: true, select: 'name email avatarUrl createdAt _id xp completedChallengesXpAwarded awardedActionIds' }
       );
+    }
+
+    if (challenge.challengeType === 'result') {
+      try {
+        const userForChecklist = await User.findById(authUserId);
+        if (userForChecklist) {
+          syncTodayChecklistForResultActions(userForChecklist, req, challenge, prevActions, actions);
+          await userForChecklist.save();
+        }
+      } catch (syncErr) {
+        console.error('Error syncing result actions to daily checklist:', syncErr);
+      }
     }
 
     res.json({
@@ -1296,39 +1486,16 @@ router.post('/:id/comments', async (req, res) => {
       }
     }
     
-    // Create notification for challenge owner if they are not the one commenting
+    // Notify challenge owner (same flow as mention notifications)
     const ownerId = challenge.owner?._id || challenge.owner;
-    if (ownerId && ownerId.toString() !== userId.toString()) {
-      const Notification = require('../models/Notification');
-      const { sendPushNotification } = require('../utils/pushService');
-      const User = require('../models/User');
-      
-      try {
-        const notification = await Notification.create({
-          userId: ownerId,
-          type: 'comment',
-          challengeId: challenge._id,
-          commentId: newComment._id,
-          fromUserId: userId,
-          read: false
-        });
-        
-        // Send push notification
-        const fromUser = await User.findById(userId, 'name');
-        await sendPushNotification(ownerId, {
-          title: 'New Comment',
-          body: `${fromUser?.name || 'Someone'} commented on your challenge "${challenge.title}"`,
-          data: {
-            notificationId: notification._id.toString(),
-            challengeId: challenge._id.toString(),
-            type: 'comment'
-          },
-          tag: `challenge-${challenge._id}`
-        });
-      } catch (notificationError) {
-        // Log error but don't fail the comment operation
-        console.error('Error creating comment notification:', notificationError);
-      }
+    if (ownerId) {
+      await notifyChallengeCommentRecipient({
+        recipientUserId: ownerId,
+        fromUserId: userId,
+        challenge,
+        type: 'comment',
+        commentId: newComment._id
+      });
     }
     
     res.status(201).json({ 
@@ -1433,22 +1600,15 @@ router.post('/:id/comments/:commentId/reply', async (req, res) => {
 
     const newReply = comment.replies[comment.replies.length - 1];
     
-    // Create notification if user was mentioned
-    if (mentionedUserId && mentionedUserId.toString() !== userId.toString()) {
-      try {
-        const Notification = require('../models/Notification');
-        await Notification.create({
-          userId: mentionedUserId,
-          type: 'mention',
-          challengeId: challenge._id,
-          commentId: comment._id,
-          replyId: newReply._id,
-          fromUserId: userId
-        });
-      } catch (notifError) {
-        console.error('Error creating notification:', notifError);
-        // Don't fail the reply if notification fails
-      }
+    if (mentionedUserId) {
+      await notifyChallengeCommentRecipient({
+        recipientUserId: mentionedUserId,
+        fromUserId: userId,
+        challenge,
+        type: 'mention',
+        commentId: comment._id,
+        replyId: newReply._id
+      });
     }
 
     res.status(201).json({ message: 'Reply added successfully', reply: newReply });
@@ -1559,37 +1719,15 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) 
       }
     }
     
-    // Create notification if user was mentioned
-    if (mentionedUserId && mentionedUserId.toString() !== userId.toString()) {
-      try {
-        const Notification = require('../models/Notification');
-        const { sendPushNotification } = require('../utils/pushService');
-        
-        const notification = await Notification.create({
-          userId: mentionedUserId,
-          type: 'mention',
-          challengeId: challenge._id,
-          commentId: comment._id,
-          replyId: newNestedReply._id,
-          fromUserId: userId
-        });
-        
-        // Send push notification
-        const fromUser = await User.findById(userId, 'name');
-        await sendPushNotification(mentionedUserId, {
-          title: 'You were mentioned',
-          body: `${fromUser?.name || 'Someone'} mentioned you in a reply on "${challenge.title}"`,
-          data: {
-            notificationId: notification._id.toString(),
-            challengeId: challenge._id.toString(),
-            type: 'mention'
-          },
-          tag: `challenge-${challenge._id}`
-        });
-      } catch (notifError) {
-        console.error('Error creating notification:', notifError);
-        // Don't fail the reply if notification fails
-      }
+    if (mentionedUserId) {
+      await notifyChallengeCommentRecipient({
+        recipientUserId: mentionedUserId,
+        fromUserId: userId,
+        challenge,
+        type: 'mention',
+        commentId: comment._id,
+        replyId: newNestedReply._id
+      });
     }
     
     // Return the properly populated nested reply

@@ -50,6 +50,22 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
       done: {
         type: Boolean,
         default: false
+      },
+      source: {
+        kind: {
+          type: String,
+          enum: ['resultAction'],
+          required: false
+        },
+        challengeId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Challenge',
+          required: false
+        },
+        actionId: {
+          type: String,
+          required: false
+        }
       }
     }]
   }],
