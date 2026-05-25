@@ -1,3 +1,69 @@
+function getUtcPartsFallback(date) {
+  const d = new Date(date);
+  const source = Number.isNaN(d.getTime()) ? new Date() : d;
+
+  return {
+    year: String(source.getUTCFullYear()),
+    month: String(source.getUTCMonth() + 1).padStart(2, '0'),
+    day: String(source.getUTCDate()).padStart(2, '0'),
+    hour: String(source.getUTCHours()).padStart(2, '0'),
+    minute: String(source.getUTCMinutes()).padStart(2, '0')
+  };
+}
+
+function getLocalParts(date, timeZone) {
+  const tz = timeZone || 'UTC';
+
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+    const parts = formatter.formatToParts(date);
+    const get = (type) => parts.find((p) => p.type === type)?.value || '';
+    return {
+      year: get('year'),
+      month: get('month'),
+      day: get('day'),
+      hour: get('hour'),
+      minute: get('minute')
+    };
+  } catch {
+    if (tz === 'UTC') {
+      return getUtcPartsFallback(date);
+    }
+
+    return getLocalParts(date, 'UTC');
+  }
+}
+
+function toLocalDateKey(date, timeZone) {
+  const parts = getLocalParts(date, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function normalizeDateLikeToYmd(value) {
+  if (!value) return null;
+
+  const raw = String(value);
+  if (raw.length >= 10) {
+    const candidate = raw.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  return parsed.toISOString().slice(0, 10);
+}
+
 /**
  * Converts a UTC date to the client's local day string 'YYYY-MM-DD'.
  * @param {Date|string|number} date - The UTC date to convert
@@ -93,6 +159,9 @@ function serializeChecklistForClientDay(checklist, clientDayStr) {
 }
 
 module.exports = {
+  getLocalParts,
+  toLocalDateKey,
+  normalizeDateLikeToYmd,
   toClientDayKey,
   getClientDayRange,
   findLatestChecklistInRange,

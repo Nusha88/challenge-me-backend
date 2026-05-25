@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const Challenge = require('../models/Challenge');
 const User = require('../models/User');
-const { getClientDayRange, findLatestChecklistInRange } = require('../utils/dateHelpers');
+const { getClientDayRange } = require('../utils/dateHelpers');
+const { findByClientDay, upsertChecklist } = require('../utils/dailyChecklistService');
 const {
   isResultChallengeCompleted,
   calculateResultProgressXp,
@@ -140,22 +141,22 @@ function taskMatchesResultActionSource(task, challengeId, actionId) {
   return cid === String(challengeId) && String(s.actionId) === String(actionId);
 }
 
-function syncTodayChecklistForResultActions(user, req, challenge, prevActions, nextActions) {
+async function syncTodayChecklistForResultActions(userId, legacyChecklists, req, challenge, prevActions, nextActions) {
   if (challenge.challengeType !== 'result') return;
   const { newlyChecked, newlyUnchecked } = diffResultActionCheckStates(prevActions, nextActions);
   if (newlyChecked.length === 0 && newlyUnchecked.length === 0) return;
 
-  const { startUtc: todayStartUtc, endUtc: todayEndUtc } = getClientDayRange(req, 0);
+  const { startUtc: todayStartUtc, endUtc: todayEndUtc, clientDayStr: todayStr } = getClientDayRange(req, 0);
   const challengeId = challenge._id;
   const missionTitle = (challenge.title && String(challenge.title).trim()) || 'Mission';
 
-  const existingTodayChecklist = findLatestChecklistInRange(user.dailyChecklists || [], todayStartUtc, todayEndUtc);
-
-  const checklistsToKeep = (user.dailyChecklists || []).filter(checklist => {
-    if (!checklist.date) return true;
-    const t = new Date(checklist.date).getTime();
-    return !(t >= todayStartUtc.getTime() && t < todayEndUtc.getTime());
-  });
+  const existingTodayChecklist = await findByClientDay(
+    userId,
+    todayStr,
+    legacyChecklists,
+    todayStartUtc,
+    todayEndUtc
+  );
 
   const tasks = [];
   if (existingTodayChecklist && Array.isArray(existingTodayChecklist.tasks)) {
@@ -201,13 +202,13 @@ function syncTodayChecklistForResultActions(user, req, challenge, prevActions, n
     }
   }
 
-  checklistsToKeep.push({
-    date: todayStartUtc,
-    tasks
+  await upsertChecklist({
+    userId,
+    localDate: todayStr,
+    timeZone: 'UTC',
+    tasks,
+    anchorDate: todayStartUtc
   });
-
-  user.dailyChecklists = checklistsToKeep;
-  user.markModified('dailyChecklists');
 }
 
 function isChallengeCompleted(challenge, today) {
@@ -426,10 +427,16 @@ router.patch('/:id/actions', async (req, res) => {
 
     if (challenge.challengeType === 'result') {
       try {
-        const userForChecklist = await User.findById(authUserId);
+        const userForChecklist = await User.findById(authUserId).select('dailyChecklists');
         if (userForChecklist) {
-          syncTodayChecklistForResultActions(userForChecklist, req, challenge, prevActions, actions);
-          await userForChecklist.save();
+          await syncTodayChecklistForResultActions(
+            userForChecklist._id,
+            userForChecklist.dailyChecklists,
+            req,
+            challenge,
+            prevActions,
+            actions
+          );
         }
       } catch (syncErr) {
         console.error('Error syncing result actions to daily checklist:', syncErr);

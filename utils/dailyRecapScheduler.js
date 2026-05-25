@@ -1,59 +1,55 @@
 const User = require('../models/User');
 const Challenge = require('../models/Challenge');
+const Notification = require('../models/Notification');
 const { sendPushNotification } = require('./pushService');
+const { findForRecapBatch } = require('./dailyChecklistService');
+const { toLocalDateKey, getLocalParts } = require('./dateHelpers');
+const { groupChallengesByUserId, getUserDailyProgress } = require('./dailyProgress');
 
 const CHECK_EVERY_MS = 60 * 1000;
+const RECAP_SEND_WINDOW_MINUTES = 10;
 
 let intervalId = null;
 let isRunning = false;
 
-function getLocalParts(date, timeZone) {
-  try {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone: timeZone || 'UTC',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
-    const parts = formatter.formatToParts(date);
-    const get = (type) => parts.find((p) => p.type === type)?.value || '';
-    return {
-      year: get('year'),
-      month: get('month'),
-      day: get('day'),
-      hour: get('hour'),
-      minute: get('minute')
-    };
-  } catch {
-    return getLocalParts(date, 'UTC');
+function parseClockToMinutes(timeStr) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(timeStr || '').trim());
+  if (!match) return null;
+
+  const hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+
+  return hours * 60 + minutes;
+}
+
+function getLocalMinutesOfDay(now, timeZone) {
+  const parts = getLocalParts(now, timeZone);
+  const hours = parseInt(parts.hour, 10);
+  const minutes = parseInt(parts.minute, 10);
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+  return hours * 60 + minutes;
+}
+
+function isWithinSendWindow(now, targetTime, timeZone, windowMinutes = RECAP_SEND_WINDOW_MINUTES) {
+  const targetMinutes = parseClockToMinutes(targetTime);
+  const currentMinutes = getLocalMinutesOfDay(now, timeZone);
+
+  if (targetMinutes === null || currentMinutes === null) return false;
+
+  const window = Math.max(1, Number(windowMinutes) || RECAP_SEND_WINDOW_MINUTES);
+  const endMinutes = targetMinutes + window;
+  const minutesInDay = 24 * 60;
+
+  if (endMinutes < minutesInDay) {
+    return currentMinutes >= targetMinutes && currentMinutes < endMinutes;
   }
-}
 
-function toLocalDateKey(date, timeZone) {
-  const p = getLocalParts(date, timeZone);
-  return `${p.year}-${p.month}-${p.day}`;
-}
-
-function toLocalTimeKey(date, timeZone) {
-  const p = getLocalParts(date, timeZone);
-  return `${p.hour}:${p.minute}`;
-}
-
-function normalizeDateLikeToYmd(value) {
-  if (!value) return null;
-  const raw = String(value);
-  if (raw.length >= 10) {
-    const candidate = raw.slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
-      return candidate;
-    }
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toISOString().slice(0, 10);
+  return currentMinutes >= targetMinutes || currentMinutes < (endMinutes % minutesInDay);
 }
 
 function getLocalizedRecap(userLanguage) {
@@ -78,85 +74,50 @@ function getLocalizedRecap(userLanguage) {
   };
 }
 
-function isDateWithinRange(localDate, startDate, endDate, timeZone) {
-  const startKey = toLocalDateKey(new Date(startDate), timeZone);
-  const endKey = toLocalDateKey(new Date(endDate), timeZone);
-  return localDate >= startKey && localDate <= endKey;
-}
-
-function getChecklistProgressForDate(user, localDate, timeZone) {
-  const list = Array.isArray(user.dailyChecklists) ? user.dailyChecklists : [];
-  const todayEntries = list.filter((entry) => {
-    if (!entry?.date) return false;
-    return toLocalDateKey(new Date(entry.date), timeZone) === localDate;
-  });
-
-  let total = 0;
-  let completed = 0;
-
-  for (const entry of todayEntries) {
-    const tasks = Array.isArray(entry.tasks) ? entry.tasks : [];
-    total += tasks.length;
-    completed += tasks.filter((task) => !!task?.done).length;
-  }
-
-  return { total, completed };
-}
-
-function getMissionProgressForDate(challenges, userId, localDate, timeZone) {
-  let total = 0;
-  let completed = 0;
-  const userIdStr = String(userId);
-
-  for (const challenge of challenges) {
-    if (!challenge?.startDate || !challenge?.endDate) continue;
-    if (!isDateWithinRange(localDate, challenge.startDate, challenge.endDate, timeZone)) continue;
-
-    const participant = (challenge.participants || []).find((p) => {
-      return p?.userId && String(p.userId) === userIdStr;
-    });
-    if (!participant) continue;
-
-    total += 1;
-    const completedDays = Array.isArray(participant.completedDays) ? participant.completedDays : [];
-    const isDoneToday = completedDays.some((d) => normalizeDateLikeToYmd(d) === localDate);
-    if (isDoneToday) completed += 1;
-  }
-
-  return { total, completed };
-}
-
-async function processUserDailyRecap(user, now) {
+function isUserDueForRecapTick(user, now) {
   const tz = user.dailyRecapTimezone || 'UTC';
-  const localTime = toLocalTimeKey(now, tz);
   const localDate = toLocalDateKey(now, tz);
   const targetTime = user.dailyRecapTime || '20:00';
 
-  if (localTime !== targetTime) return;
+  if (!isWithinSendWindow(now, targetTime, tz, RECAP_SEND_WINDOW_MINUTES)) return false;
+  if (user.dailyRecapLastSentLocalDate === localDate) return false;
+
+  return true;
+}
+
+async function processUserDailyRecap(user, now, challenges, checklistByUserAndDate) {
+  const tz = user.dailyRecapTimezone || 'UTC';
+  const localDate = toLocalDateKey(now, tz);
+
   if (user.dailyRecapLastSentLocalDate === localDate) return;
 
-  const challenges = await Challenge.find({
-    challengeType: 'habit',
-    'participants.userId': user._id
-  }).select('startDate endDate participants');
+  const checklist = checklistByUserAndDate.get(`${user._id}:${localDate}`) || null;
+  const progress = await getUserDailyProgress(user, now, { challenges, checklist });
 
-  const checklistProgress = getChecklistProgressForDate(user, localDate, tz);
-  const missionProgress = getMissionProgressForDate(challenges, user._id, localDate, tz);
-
-  const totalItems = checklistProgress.total + missionProgress.total;
-  const completedItems = checklistProgress.completed + missionProgress.completed;
-
-  if (totalItems === 0) return;
-  if (completedItems <= 0 || completedItems >= totalItems) return;
+  if (progress.isEmpty) return;
+  if (!progress.isStarted || progress.isComplete) return;
 
   const localized = getLocalizedRecap(user.dailyRecapLanguage);
   const body = localized.bodies[Math.floor(Math.random() * localized.bodies.length)];
+
+  const notification = await Notification.create({
+    userId: user._id,
+    type: 'daily_recap',
+    title: localized.title,
+    body,
+    localDate,
+    read: false
+  });
 
   await sendPushNotification(user._id, {
     title: localized.title,
     body,
     tag: 'daily-recap',
-    data: { type: 'daily-recap' }
+    data: {
+      type: 'daily-recap',
+      notificationId: notification._id.toString(),
+      localDate
+    }
   });
 
   user.dailyRecapLastSentLocalDate = localDate;
@@ -168,17 +129,40 @@ async function runDailyRecapTick() {
   isRunning = true;
   try {
     const now = new Date();
-    const users = await User.find({
+
+    const candidates = await User.find({
       dailyRecapEnabled: true,
       pushSubscription: { $ne: null },
       dailyRecapTime: { $exists: true, $ne: '' }
-    }).select(
-      '_id pushSubscription dailyRecapEnabled dailyRecapTime dailyRecapTimezone dailyRecapLanguage dailyRecapLastSentLocalDate dailyChecklists'
+    })
+      .select('_id dailyRecapTime dailyRecapTimezone dailyRecapLastSentLocalDate')
+      .lean();
+
+    const dueUserIds = candidates
+      .filter((user) => isUserDueForRecapTick(user, now))
+      .map((user) => user._id);
+
+    if (dueUserIds.length === 0) return;
+
+    const dueUsers = await User.find({ _id: { $in: dueUserIds } }).select(
+      '_id pushSubscription dailyRecapTime dailyRecapTimezone dailyRecapLanguage dailyRecapLastSentLocalDate'
     );
 
-    for (const user of users) {
+    const dueUserIdSet = new Set(dueUsers.map((user) => String(user._id)));
+    const [challenges, checklistByUserAndDate] = await Promise.all([
+      Challenge.find({
+        challengeType: 'habit',
+        'participants.userId': { $in: dueUserIds }
+      }).select('startDate endDate participants'),
+      findForRecapBatch(dueUsers, now)
+    ]);
+
+    const challengesByUserId = groupChallengesByUserId(challenges, dueUserIdSet);
+
+    for (const user of dueUsers) {
       try {
-        await processUserDailyRecap(user, now);
+        const userChallenges = challengesByUserId.get(String(user._id)) || [];
+        await processUserDailyRecap(user, now, userChallenges, checklistByUserAndDate);
       } catch (error) {
         console.error('[DailyRecap] Failed user tick:', user?._id?.toString(), error?.message || error);
       }
@@ -206,4 +190,3 @@ module.exports = {
   startDailyRecapScheduler,
   stopDailyRecapScheduler
 };
-

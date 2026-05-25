@@ -10,13 +10,31 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['mention', 'comment', 'reply', 'join', 'watch'],
+      enum: ['mention', 'comment', 'reply', 'join', 'watch', 'daily_recap'],
       required: true
+    },
+    title: {
+      type: String,
+      default: null,
+      trim: true
+    },
+    body: {
+      type: String,
+      default: null,
+      trim: true
+    },
+    localDate: {
+      type: String,
+      default: null,
+      trim: true
     },
     challengeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Challenge',
-      required: true
+      required: function requiredChallengeId() {
+        return this.type !== 'daily_recap';
+      },
+      default: null
     },
     commentId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -29,7 +47,10 @@ const notificationSchema = new mongoose.Schema(
     fromUserId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true
+      required: function requiredFromUserId() {
+        return this.type !== 'daily_recap';
+      },
+      default: null
     },
     read: {
       type: Boolean,

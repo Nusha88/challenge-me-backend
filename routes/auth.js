@@ -6,12 +6,19 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { sendPasswordResetEmail } = require('../utils/emailService');
 
-const { 
-  getClientDayRange, 
-  toClientDayKey, 
-  findLatestChecklistInRange, 
-  serializeChecklistForClientDay 
+const {
+  getClientDayRange,
+  toClientDayKey,
+  findLatestChecklistInRange,
+  serializeChecklistForClientDay
 } = require('../utils/dateHelpers');
+const {
+  findByClientDay,
+  upsertChecklist,
+  findManyByLocalDates,
+  hasCompletedChecklistTask,
+  getChecklistHistory
+} = require('../utils/dailyChecklistService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
@@ -133,7 +140,7 @@ router.get('/users/:id', async (req, res) => {
       createdAt: 1,
       _id: 1,
       dailyChecklists: 1
-    });
+    }).lean();
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -148,31 +155,11 @@ router.get('/users/:id', async (req, res) => {
       privacy: { $ne: 'private' }
     });
     
-    // Process checklist history (same logic as /daily-checklist/history)
     const rawOffset = req.headers['x-client-tz-offset'];
     const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
+    const checklistHistory = await getChecklistHistory(user._id, user.dailyChecklists, tzOffsetMin);
 
-    // Keep the most recent checklist per client day
-    const byDay = new Map();
-    for (const c of user.dailyChecklists || []) {
-      if (!c?.date) continue;
-      const key = toClientDayKey(c.date, tzOffsetMin);
-      if (!key) continue;
-      const prev = byDay.get(key);
-      if (!prev || new Date(c.date) > new Date(prev.date)) {
-        byDay.set(key, c);
-      }
-    }
-
-    const checklistHistory = Array.from(byDay.entries()).map(([clientDay, checklist]) => ({
-      ...checklist.toObject?.() || checklist,
-      clientDay
-    }));
-
-    // Sort by clientDay descending
-    checklistHistory.sort((a, b) => (a.clientDay < b.clientDay ? 1 : a.clientDay > b.clientDay ? -1 : 0));
-    
-    const userObj = user.toObject();
+    const userObj = { ...user };
     userObj.challengeCount = challengeCount;
     userObj.checklistHistory = checklistHistory;
     
@@ -496,8 +483,13 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
 
     const { startUtc: todayStartUtc, endUtc: todayEndUtc, clientDayStr: todayStr } = getClientDayRange(req, 0);
 
-    // Find checklist for today using the helper
-    const todayChecklist = findLatestChecklistInRange(user.dailyChecklists, todayStartUtc, todayEndUtc);
+    const todayChecklist = await findByClientDay(
+      user._id,
+      todayStr,
+      user.dailyChecklists,
+      todayStartUtc,
+      todayEndUtc
+    );
 
     if (todayChecklist) {
       res.json({ 
@@ -528,8 +520,13 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
 
     const { startUtc: todayStartUtc, endUtc: todayEndUtc, clientDayStr: todayStr } = getClientDayRange(req, 0);
 
-    // Find today's existing checklist (if any) using the helper
-    const existingTodayChecklist = findLatestChecklistInRange(user.dailyChecklists, todayStartUtc, todayEndUtc);
+    const existingTodayChecklist = await findByClientDay(
+      user._id,
+      todayStr,
+      user.dailyChecklists,
+      todayStartUtc,
+      todayEndUtc
+    );
 
     const prevDoneCount = existingTodayChecklist?.tasks
       ? existingTodayChecklist.tasks.filter(t => t && t.done).length
@@ -538,21 +535,14 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     const newlyCompleted = Math.max(0, newDoneCount - prevDoneCount);
     const xpGained = newlyCompleted * 5;
 
-    // Remove any duplicate checklists for today (cleanup) using client's today window
-    const checklistsToKeep = user.dailyChecklists.filter(checklist => {
-      if (!checklist.date) return true;
-      const t = new Date(checklist.date).getTime();
-      return !(t >= todayStartUtc.getTime() && t < todayEndUtc.getTime());
+    await upsertChecklist({
+      userId: user._id,
+      localDate: todayStr,
+      timeZone: 'UTC',
+      tasks,
+      anchorDate: todayStartUtc
     });
 
-    // Add today's checklist (store at the start of the client's day window in UTC)
-    checklistsToKeep.push({
-      date: todayStartUtc,
-      tasks: tasks
-    });
-
-    // Update user with the cleaned list
-    user.dailyChecklists = checklistsToKeep;
     if (xpGained > 0) {
       user.xp = (user.xp || 0) + xpGained;
     }
@@ -566,15 +556,19 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     // Calculate current streak
     let currentStreak = 0;
     
-    // Helper function to check if a day was completed
+    const streakDayKeys = [];
+    for (let i = 0; i < 365; i++) {
+      const { clientDayStr } = getClientDayRange(req, -i);
+      streakDayKeys.push(clientDayStr);
+    }
+    const checklistsByLocalDate = await findManyByLocalDates(user._id, streakDayKeys);
+
     const checkDayCompletion = (startUtc, endUtc, dateStr) => {
-      // Check checklist using the helper
-      const checklistForDate = findLatestChecklistInRange(user.dailyChecklists, startUtc, endUtc);
-      
-      const hasCompletedChecklistTask = checklistForDate && checklistForDate.tasks && checklistForDate.tasks.length > 0
-        ? checklistForDate.tasks.some(task => task.done === true)
-        : false;
-      
+      const checklistForDate = checklistsByLocalDate.get(dateStr)
+        || findLatestChecklistInRange(user.dailyChecklists, startUtc, endUtc);
+
+      const hasCompletedChecklist = hasCompletedChecklistTask(checklistForDate);
+
       // Check habit challenges
       let hasCompletedChallenge = false;
       for (const challenge of habitChallenges) {
@@ -603,7 +597,7 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
         }
       }
       
-      return hasCompletedChecklistTask || hasCompletedChallenge;
+      return hasCompletedChecklist || hasCompletedChallenge;
     };
     
     // Calculate streak starting from today
@@ -626,15 +620,15 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     }
     
     const updatedUser = await user.save();
+    const updatedChecklist = await findByClientDay(
+      user._id,
+      todayStr,
+      [],
+      todayStartUtc,
+      todayEndUtc
+    );
 
-    // Find and return the checklist we just created
-    const updatedChecklist = updatedUser.dailyChecklists.find(checklist => {
-      if (!checklist.date) return false;
-      const t = new Date(checklist.date).getTime();
-      return t >= todayStartUtc.getTime() && t < todayEndUtc.getTime();
-    });
-
-    res.json({ 
+    res.json({
       message: 'Checklist updated successfully',
       checklist: serializeChecklistForClientDay(updatedChecklist, todayStr),
       xpGained,
@@ -657,33 +651,14 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
 // Get all daily checklists (history)
 router.get('/daily-checklist/history', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id, 'dailyChecklists');
+    const user = await User.findById(req.user.id).select('dailyChecklists');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Group and label by CLIENT local day to avoid "yesterday shown as today" in the journal.
     const rawOffset = req.headers['x-client-tz-offset'];
     const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
-
-    // Keep the most recent checklist per client day
-    const byDay = new Map();
-    for (const c of user.dailyChecklists || []) {
-      if (!c?.date) continue;
-      const key = toClientDayKey(c.date, tzOffsetMin);
-      if (!key) continue;
-      const prev = byDay.get(key);
-      if (!prev || new Date(c.date) > new Date(prev.date)) {
-        byDay.set(key, c);
-      }
-    }
-
-    const grouped = Array.from(byDay.entries()).map(([clientDay, checklist]) => 
-      serializeChecklistForClientDay(checklist, clientDay)
-    );
-
-    // Sort by clientDay descending
-    grouped.sort((a, b) => (a.clientDay < b.clientDay ? 1 : a.clientDay > b.clientDay ? -1 : 0));
+    const grouped = await getChecklistHistory(user._id, user.dailyChecklists, tzOffsetMin);
 
     res.json({ checklists: grouped });
   } catch (error) {
@@ -702,8 +677,13 @@ router.get('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
 
     const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc, clientDayStr: tomorrowStr } = getClientDayRange(req, 1);
 
-    // Find checklist for tomorrow using the helper
-    const tomorrowChecklist = findLatestChecklistInRange(user.dailyChecklists, tomorrowStartUtc, tomorrowEndUtc);
+    const tomorrowChecklist = await findByClientDay(
+      user._id,
+      tomorrowStr,
+      user.dailyChecklists,
+      tomorrowStartUtc,
+      tomorrowEndUtc
+    );
 
     if (tomorrowChecklist) {
       res.json({ 
@@ -732,39 +712,26 @@ router.put('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc } = getClientDayRange(req, 1);
+    const { startUtc: tomorrowStartUtc, endUtc: tomorrowEndUtc, clientDayStr: tomorrowStr } = getClientDayRange(req, 1);
 
-    // Remove any duplicate checklists for tomorrow
-    const checklistsToKeep = user.dailyChecklists.filter(checklist => {
-      if (!checklist.date) return true;
-      const t = new Date(checklist.date).getTime();
-      return !(t >= tomorrowStartUtc.getTime() && t < tomorrowEndUtc.getTime());
+    const updatedChecklist = await upsertChecklist({
+      userId: user._id,
+      localDate: tomorrowStr,
+      timeZone: 'UTC',
+      tasks,
+      anchorDate: tomorrowStartUtc
     });
 
-    // Add tomorrow's checklist
-    checklistsToKeep.push({
-      date: tomorrowStartUtc,
-      tasks: tasks
-    });
-
-    // Update user with the cleaned list
-    user.dailyChecklists = checklistsToKeep;
-    const updatedUser = await user.save();
-
-    // Find and return the checklist we just created using the helper
-    const updatedChecklist = findLatestChecklistInRange(updatedUser.dailyChecklists, tomorrowStartUtc, tomorrowEndUtc);
-    const { clientDayStr: tomorrowStr } = getClientDayRange(req, 1);
-
-    res.json({ 
+    res.json({
       message: 'Tomorrow\'s checklist updated successfully',
       checklist: serializeChecklistForClientDay(updatedChecklist, tomorrowStr),
       user: {
-        id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        avatarUrl: updatedUser.avatarUrl,
-        xp: updatedUser.xp || 0,
-        createdAt: updatedUser.createdAt
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+        xp: user.xp || 0,
+        createdAt: user.createdAt
       }
     });
   } catch (error) {
