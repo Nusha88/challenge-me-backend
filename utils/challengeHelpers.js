@@ -74,8 +74,41 @@ function collectNewlyCheckedActionIds(prevActions = [], nextActions = []) {
   return newlyCheckedIds;
 }
 
+/**
+ * Adds watchersCount and isWatched (for the viewing user) to each challenge.
+ * @param {Array} challenges - Mongoose docs or plain objects
+ * @param {string|null} viewerUserId - Authenticated user id, if any
+ * @param {import('mongoose').Model} UserModel
+ */
+async function enrichChallengesWithWatchState(challenges, viewerUserId, UserModel) {
+  let watchedIdSet = null
+
+  if (viewerUserId) {
+    const viewer = await UserModel.findById(viewerUserId).select('watchedChallenges').lean()
+    watchedIdSet = new Set((viewer?.watchedChallenges || []).map((id) => String(id)))
+  }
+
+  return Promise.all(
+    challenges.map(async (challenge) => {
+      const challengeObj =
+        typeof challenge.toObject === 'function' ? challenge.toObject() : { ...challenge }
+      const challengeId = challengeObj._id
+
+      challengeObj.watchersCount = await UserModel.countDocuments({
+        watchedChallenges: challengeId
+      })
+      challengeObj.isWatched = watchedIdSet
+        ? watchedIdSet.has(String(challengeId))
+        : false
+
+      return challengeObj
+    })
+  )
+}
+
 module.exports = {
   countCompletedActionItems,
   isResultChallengeCompleted,
-  collectNewlyCheckedActionIds
+  collectNewlyCheckedActionIds,
+  enrichChallengesWithWatchState
 };

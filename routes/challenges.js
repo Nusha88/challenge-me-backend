@@ -6,7 +6,8 @@ const { getClientDayRange, normalizeDateLikeToYmd } = require('../utils/dateHelp
 const { findByClientDay, upsertChecklist } = require('../utils/dailyChecklistService');
 const {
   isResultChallengeCompleted,
-  collectNewlyCheckedActionIds
+  collectNewlyCheckedActionIds,
+  enrichChallengesWithWatchState
 } = require('../utils/challengeHelpers');
 const { getLocalizedCommentPush } = require('../utils/notificationMessages');
 const {
@@ -894,16 +895,14 @@ router.get('/', async (req, res) => {
     const paginatedChallenges = allChallenges.slice(skip, skip + limitNum);
     const hasMore = skip + limitNum < totalChallenges;
     
-    // Add watchers count to each challenge
-    const User = require('../models/User');
-    const challengesWithWatchers = await Promise.all(paginatedChallenges.map(async (challenge) => {
-      const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
-      const challengeObj = challenge.toObject();
-      challengeObj.watchersCount = watchersCount;
-      return challengeObj;
-    }));
-    
-    res.json({ 
+    const requestingUserId = decodeOptionalAuthUserId(req);
+    const challengesWithWatchers = await enrichChallengesWithWatchState(
+      paginatedChallenges,
+      requestingUserId,
+      User
+    );
+
+    res.json({
       challenges: challengesWithWatchers,
       pagination: {
         page: pageNum,
@@ -1042,22 +1041,7 @@ router.get('/user/:userId', async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    // Try to get authenticated user ID if token is provided (optional authentication)
-    let requestingUserId = null;
-    const authHeader = req.headers['authorization'];
-    if (authHeader) {
-      const token = authHeader.split(' ')[1];
-      if (token) {
-        try {
-          const jwt = require('jsonwebtoken');
-          const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
-          const decoded = jwt.verify(token, JWT_SECRET);
-          requestingUserId = decoded.id;
-        } catch (err) {
-          // Token invalid or expired, continue without authentication
-        }
-      }
-    }
+    const requestingUserId = decodeOptionalAuthUserId(req);
 
     if (!userId) {
       return res.status(400).json({ message: 'User ID is required' });
@@ -1167,15 +1151,12 @@ router.get('/user/:userId', async (req, res) => {
       });
     }
 
-    // Add watchers count to each challenge
-    const User = require('../models/User');
-    const challengesWithWatchers = await Promise.all(allChallenges.map(async (challenge) => {
-      const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
-      const challengeObj = challenge.toObject();
-      challengeObj.watchersCount = watchersCount;
-      return challengeObj;
-    }));
-    
+    const challengesWithWatchers = await enrichChallengesWithWatchState(
+      allChallenges,
+      requestingUserId,
+      User
+    );
+
     res.json({ challenges: challengesWithWatchers });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
