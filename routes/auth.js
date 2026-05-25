@@ -19,6 +19,23 @@ const {
   hasCompletedChecklistTask,
   getChecklistHistory
 } = require('../utils/dailyChecklistService');
+const {
+  awardDailyFullCompletionXp,
+  awardChecklistTaskXp,
+  awardStreakMilestoneXp
+} = require('../utils/xpService');
+
+function serializeUserForClient(user) {
+  if (!user) return null;
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    avatarUrl: user.avatarUrl,
+    xp: user.xp || 0,
+    createdAt: user.createdAt
+  };
+}
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
@@ -300,41 +317,31 @@ router.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
-// Award daily 100% bonus XP (+50) once per UTC day
+// Award daily 100% bonus XP (+50) once per client day
 router.post('/xp/daily-bonus', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const { clientDayStr: todayStr } = getClientDayRange(req, 0);
+    const xpResult = await awardDailyFullCompletionXp(req.user.id, todayStr);
+    const user = xpResult.user || await User.findById(req.user.id);
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const todayStr = new Date().toISOString().slice(0, 10); // UTC YYYY-MM-DD
-    const alreadyAwarded = Array.isArray(user.xpDailyBonusDates) && user.xpDailyBonusDates.includes(todayStr);
-
-    if (alreadyAwarded) {
-      return res.json({
-        awarded: false,
-        xp: user.xp || 0,
-        date: todayStr
-      });
-    }
-
-    user.xp = (user.xp || 0) + 50;
-    user.xpDailyBonusDates = [...(user.xpDailyBonusDates || []), todayStr];
-    await user.save();
-
     res.json({
-      awarded: true,
-      xpGained: 50,
+      awarded: xpResult.awarded,
+      xpGained: xpResult.xpGained,
       xp: user.xp || 0,
       date: todayStr,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        avatarUrl: user.avatarUrl,
-        xp: user.xp || 0,
-        createdAt: user.createdAt
+      user: serializeUserForClient(user),
+      xpAward: {
+        gained: xpResult.xpGained,
+        events: [{
+          awarded: xpResult.awarded,
+          gained: xpResult.xpGained,
+          reason: xpResult.reason || null,
+          eventKey: xpResult.eventKey || null
+        }]
       }
     });
   } catch (error) {
@@ -528,12 +535,16 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       todayEndUtc
     );
 
-    const prevDoneCount = existingTodayChecklist?.tasks
-      ? existingTodayChecklist.tasks.filter(t => t && t.done).length
-      : 0;
-    const newDoneCount = tasks.filter(t => t && t.done).length;
-    const newlyCompleted = Math.max(0, newDoneCount - prevDoneCount);
-    const xpGained = newlyCompleted * 5;
+    const prevTasks = existingTodayChecklist?.tasks || [];
+    const xpResults = [];
+
+    for (let i = 0; i < tasks.length; i++) {
+      const wasDone = Boolean(prevTasks[i]?.done);
+      const isDone = Boolean(tasks[i]?.done);
+      if (!wasDone && isDone) {
+        xpResults.push(await awardChecklistTaskXp(user._id, todayStr, i));
+      }
+    }
 
     await upsertChecklist({
       userId: user._id,
@@ -543,10 +554,6 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       anchorDate: todayStartUtc
     });
 
-    if (xpGained > 0) {
-      user.xp = (user.xp || 0) + xpGained;
-    }
-    
     // Check for 7-day streak milestone and award XP
     const habitChallenges = await Challenge.find({
       challengeType: 'habit',
@@ -612,14 +619,15 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       }
     }
     
-    // Award +50 XP for 7-day streak milestone if not already awarded
-    if (currentStreak >= 7 && !user.streakMilestonesAwarded?.includes(7)) {
-      user.xp = (user.xp || 0) + 50;
-      user.streakMilestonesAwarded = [...(user.streakMilestonesAwarded || []), 7];
-      xpGained += 50;
+    if (currentStreak >= 7) {
+      xpResults.push(await awardStreakMilestoneXp(user._id, 7));
     }
-    
-    const updatedUser = await user.save();
+
+    const xpGained = xpResults.reduce((sum, item) => sum + item.xpGained, 0);
+    const latestUser = xpResults.reduce(
+      (acc, item) => (item.user ? item.user : acc),
+      await User.findById(user._id)
+    );
     const updatedChecklist = await findByClientDay(
       user._id,
       todayStr,
@@ -632,14 +640,16 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       message: 'Checklist updated successfully',
       checklist: serializeChecklistForClientDay(updatedChecklist, todayStr),
       xpGained,
-      xp: updatedUser.xp || 0,
-      user: {
-        id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        avatarUrl: updatedUser.avatarUrl,
-        xp: updatedUser.xp || 0,
-        createdAt: updatedUser.createdAt
+      xp: latestUser?.xp || 0,
+      user: serializeUserForClient(latestUser),
+      xpAward: {
+        gained: xpGained,
+        events: xpResults.map((item) => ({
+          awarded: item.awarded,
+          gained: item.xpGained,
+          reason: item.reason || null,
+          eventKey: item.eventKey || null
+        }))
       }
     });
   } catch (error) {

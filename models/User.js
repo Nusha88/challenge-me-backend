@@ -73,26 +73,8 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: Number,
     default: 0
   },
-  // Track which UTC dates already received the +50 daily 100% bonus (YYYY-MM-DD)
-  xpDailyBonusDates: {
+  awardedXpEventKeys: {
     type: [String],
-    default: []
-  },
-  // Track which streak milestones have been awarded (e.g., [7, 14, 30])
-  streakMilestonesAwarded: {
-    type: [Number],
-    default: []
-  },
-  // Track challenges that awarded completion XP
-  completedChallengesXpAwarded: {
-    type: [mongoose.Schema.Types.ObjectId],
-    ref: 'Challenge',
-    default: []
-  },
-  // Track challenges that awarded first comment XP
-  commentedChallengesXpAwarded: {
-    type: [mongoose.Schema.Types.ObjectId],
-    ref: 'Challenge',
     default: []
   },
   pushSubscription: {
@@ -125,11 +107,6 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
   dailyRecapLastSentLocalDate: {
     type: String,
     default: null
-  },
-  // Track which result action items have awarded XP (string format: challengeId:actionId)
-  awardedActionIds: {
-    type: [String],
-    default: []
   },
   createdAt: {
     type: Date,

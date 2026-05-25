@@ -33,91 +33,49 @@ function isResultChallengeCompleted(actions) {
   });
 }
 
-/**
- * Считает XP за новые выполненные пункты.
- * @param {string} challengeId - ID челленджа
- * @param {Array} prevActions - Состояние действий до обновления
- * @param {Array} nextActions - Новое состояние действий
- * @param {Array} awardedActionIds - Список ID пунктов, за которые уже начислен XP
- * @returns {object} { xpGained: number, newlyAwardedIds: string[] }
- */
-function calculateResultProgressXp(challengeId, prevActions, nextActions, awardedActionIds) {
-  let xpGained = 0;
-  const newlyAwardedIds = [];
-  const awardedSet = new Set(awardedActionIds || []);
+function collectNewlyCheckedActionIds(prevActions = [], nextActions = []) {
+  const prevCheckedById = new Map();
 
-  if (!nextActions || !Array.isArray(nextActions)) return { xpGained, newlyAwardedIds };
+  function walkPrev(actions) {
+    for (const action of actions || []) {
+      if (action?._id) {
+        prevCheckedById.set(String(action._id), !!action.checked);
+      }
 
-  // Helper function to find action status in prevActions
-  const findInPrev = (id, children = false, parentId = null) => {
-    if (!prevActions || !Array.isArray(prevActions)) return null;
-    if (!children) {
-      return prevActions.find(a => a._id && a._id.toString() === id.toString());
-    } else {
-      const parent = prevActions.find(a => a._id && a._id.toString() === parentId.toString());
-      if (!parent || !parent.children) return null;
-      return parent.children.find(c => c._id && c._id.toString() === id.toString());
+      if (Array.isArray(action.children)) {
+        walkPrev(action.children);
+      }
     }
-  };
+  }
 
-  nextActions.forEach(action => {
-    const actionKey = `${challengeId}:${action._id}`;
-    const prevAction = findInPrev(action._id);
-    const wasChecked = prevAction ? !!prevAction.checked : false;
+  const newlyCheckedIds = [];
 
-    // Award XP ONLY if transition from false -> true AND not awarded before
-    if (action.checked && !wasChecked && !awardedSet.has(actionKey)) {
-      xpGained += 10;
-      newlyAwardedIds.push(actionKey);
-      awardedSet.add(actionKey);
-    }
+  function walkNext(actions) {
+    for (const action of actions || []) {
+      if (action?._id) {
+        const id = String(action._id);
+        const wasChecked = prevCheckedById.get(id) === true;
+        const isChecked = action.checked === true;
 
-    if (action.children && Array.isArray(action.children)) {
-      action.children.forEach(child => {
-        const childKey = `${challengeId}:${child._id}`;
-        const prevChild = findInPrev(child._id, true, action._id);
-        const wasChildChecked = prevChild ? !!prevChild.checked : false;
-
-        if (child.checked && !wasChildChecked && !awardedSet.has(childKey)) {
-          xpGained += 10;
-          newlyAwardedIds.push(childKey);
-          awardedSet.add(childKey);
+        if (!wasChecked && isChecked) {
+          newlyCheckedIds.push(id);
         }
-      });
+      }
+
+      if (Array.isArray(action.children)) {
+        walkNext(action.children);
+      }
     }
-  });
-
-  return { xpGained, newlyAwardedIds };
-}
-
-/**
- * Возвращает бонус XP за полное завершение result челленджа на основе сложности.
- * @param {object} challenge - Объект челленджа
- * @returns {number} XP бонус
- */
-function getResultCompletionXp(challenge) {
-  if (!challenge) return 0;
-  
-  const difficultyMap = {
-    'easy': 50,
-    'medium': 100,
-    'hard': 200
-  };
-
-  if (typeof challenge.difficulty === 'number') {
-    return challenge.difficulty;
   }
 
-  if (typeof challenge.difficulty === 'string') {
-    return difficultyMap[challenge.difficulty] || 0;
-  }
+  walkPrev(prevActions);
+  walkNext(nextActions);
 
-  return 0;
+  return newlyCheckedIds;
 }
 
 module.exports = {
   countCompletedActionItems,
   isResultChallengeCompleted,
-  calculateResultProgressXp,
-  getResultCompletionXp
+  collectNewlyCheckedActionIds
 };

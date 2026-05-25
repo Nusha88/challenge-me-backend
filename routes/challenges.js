@@ -2,22 +2,20 @@ const express = require('express');
 const router = express.Router();
 const Challenge = require('../models/Challenge');
 const User = require('../models/User');
-const { getClientDayRange } = require('../utils/dateHelpers');
+const { getClientDayRange, normalizeDateLikeToYmd } = require('../utils/dateHelpers');
 const { findByClientDay, upsertChecklist } = require('../utils/dailyChecklistService');
 const {
   isResultChallengeCompleted,
-  calculateResultProgressXp,
-  getResultCompletionXp
+  collectNewlyCheckedActionIds
 } = require('../utils/challengeHelpers');
 const { getLocalizedCommentPush } = require('../utils/notificationMessages');
-
-function getTodayUtcString() {
-  const d = new Date();
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+const {
+  awardFirstCommentXp,
+  awardHabitDayXp,
+  awardHabitCompletionXp,
+  awardResultActionXp,
+  awardResultCompletionXp
+} = require('../utils/xpService');
 
 function decodeOptionalAuthUserId(req) {
   const authHeader = req.headers['authorization'];
@@ -341,89 +339,51 @@ router.patch('/:id/actions', async (req, res) => {
     }
 
     const prevActions = JSON.parse(JSON.stringify(challenge.actions || []));
-    
-    // Update the challenge actions
+    const wasCompletedBefore = isResultChallengeCompleted(prevActions);
+
     challenge.actions = actions;
     await challenge.save();
+
+    const isCompletedNow = isResultChallengeCompleted(challenge.actions);
 
     const user = await User.findById(authUserId);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    let xpGainedTotal = 0;
     let updatedUser = user;
-    let debug = {};
+    const xpResults = [];
 
-    // 1. XP for individual action items (+10 each)
-    const { xpGained: progressXp, newlyAwardedIds } = calculateResultProgressXp(
-      challenge._id,
-      prevActions,
-      challenge.actions,
-      user.awardedActionIds
-    );
-    
-    debug.progressXp = progressXp;
-    debug.newlyAwardedIds = newlyAwardedIds;
-
-    // 2. Bonus XP for completing the whole result challenge
-    const wasCompletedBefore = isResultChallengeCompleted(prevActions);
-    const isCompletedNow = isResultChallengeCompleted(challenge.actions);
-    
-    debug.wasCompletedBefore = wasCompletedBefore;
-    debug.isCompletedNow = isCompletedNow;
-    debug.difficulty = challenge.difficulty;
-
-    // Prepare updates
-    let userUpdate = { $inc: { xp: 0 }, $addToSet: {} };
-    let hasUpdates = false;
-
-    if (progressXp > 0) {
-      userUpdate.$inc.xp += progressXp;
-      userUpdate.$addToSet.awardedActionIds = { $each: newlyAwardedIds };
-      xpGainedTotal += progressXp;
-      hasUpdates = true;
-    }
-
-    // If newly completed, try atomic award for completion bonus
-    if (isCompletedNow && !wasCompletedBefore && challenge.challengeType === 'result') {
-      const completionBonus = getResultCompletionXp(challenge);
-      debug.completionBonusValue = completionBonus;
-
-      const completionUser = await User.findOneAndUpdate(
-        { 
-          _id: authUserId,
-          completedChallengesXpAwarded: { $ne: challenge._id }
-        },
-        { 
-          $inc: { xp: completionBonus + (userUpdate.$inc.xp || 0) },
-          $addToSet: { 
-            completedChallengesXpAwarded: challenge._id,
-            ...(userUpdate.$addToSet?.awardedActionIds ? { awardedActionIds: userUpdate.$addToSet.awardedActionIds } : {})
-          }
-        },
-        { new: true, select: 'name email avatarUrl createdAt _id xp completedChallengesXpAwarded awardedActionIds' }
+    if (challenge.challengeType === 'result') {
+      const newlyCheckedActionIds = collectNewlyCheckedActionIds(
+        prevActions,
+        challenge.actions
       );
 
-      if (completionUser) {
-        debug.completionBonusActuallyAwarded = true;
-        xpGainedTotal += completionBonus;
-        updatedUser = completionUser;
-        hasUpdates = false; // Already applied everything
-      } else {
-        debug.completionBonusActuallyAwarded = false;
-        // If completion bonus was already awarded, we still might need to apply progress XP
+      for (const actionId of newlyCheckedActionIds) {
+        const xpResult = await awardResultActionXp(authUserId, challenge._id, actionId);
+        xpResults.push(xpResult);
+        if (xpResult.awarded && xpResult.user) {
+          updatedUser = xpResult.user;
+        }
+      }
+
+      if (!wasCompletedBefore && isCompletedNow) {
+        const completionXpResult = await awardResultCompletionXp(authUserId, challenge);
+        xpResults.push(completionXpResult);
+        if (completionXpResult.awarded && completionXpResult.user) {
+          updatedUser = completionXpResult.user;
+        }
       }
     }
 
-    // Apply progress XP if not already applied during completion bonus award
-    if (hasUpdates) {
-      updatedUser = await User.findByIdAndUpdate(
-        authUserId,
-        userUpdate,
-        { new: true, select: 'name email avatarUrl createdAt _id xp completedChallengesXpAwarded awardedActionIds' }
-      );
-    }
+    const xpGainedTotal = xpResults.reduce((sum, item) => sum + item.xpGained, 0);
+    const xpEvents = xpResults.map((item) => ({
+      awarded: item.awarded,
+      gained: item.xpGained,
+      reason: item.reason || null,
+      eventKey: item.eventKey || null
+    }));
 
     if (challenge.challengeType === 'result') {
       try {
@@ -449,7 +409,10 @@ router.patch('/:id/actions', async (req, res) => {
       xpGained: xpGainedTotal,
       xp: updatedUser?.xp,
       user: updatedUser,
-      debug: Object.keys(debug).length > 0 ? debug : undefined
+      xpAward: {
+        gained: xpGainedTotal,
+        events: xpEvents
+      }
     });
   } catch (error) {
     res.status(500).json({ message: 'Error updating actions', error: error.message });
@@ -506,10 +469,6 @@ router.put('/:id', async (req, res) => {
       update.frequency = null;
     }
     
-    // For actions in PUT: we allow updating them, but XP logic should ideally be in PATCH.
-    // However, for backward compatibility or full-edit, we keep a simplified XP logic here
-    // but without the complex atomic orchestration if possible, or just very clean.
-    
     if (actions !== undefined) {
       update.actions = actions;
     } else if (challengeType === 'habit' && !existingChallenge.actions) {
@@ -526,6 +485,7 @@ router.put('/:id', async (req, res) => {
     }
 
     const prevActions = JSON.parse(JSON.stringify(existingChallenge.actions || []));
+    const wasCompletedBeforePut = isResultChallengeCompleted(prevActions);
 
     const challenge = await Challenge.findByIdAndUpdate(
       id,
@@ -538,65 +498,35 @@ router.put('/:id', async (req, res) => {
 
     let xpGainedTotal = 0;
     let updatedUser = null;
-    let debug = {};
+    const putXpResults = [];
 
-    // Handle challenge XP if actions were provided in PUT
-    if (actions !== undefined && authUserId) {
+    if (actions !== undefined && authUserId && challenge.challengeType === 'result') {
       const user = await User.findById(authUserId);
       if (user) {
-        const { xpGained: progressXp, newlyAwardedIds } = calculateResultProgressXp(
-          challenge._id,
+        updatedUser = user;
+        const isCompletedNowPut = isResultChallengeCompleted(challenge.actions);
+        const newlyCheckedActionIds = collectNewlyCheckedActionIds(
           prevActions,
-          challenge.actions,
-          user.awardedActionIds
+          challenge.actions
         );
-        
-        const wasCompletedBefore = isResultChallengeCompleted(prevActions);
-        const isCompletedNow = isResultChallengeCompleted(challenge.actions);
-        
-        let userUpdate = { $inc: { xp: progressXp }, $addToSet: {} };
-        if (newlyAwardedIds.length > 0) {
-          userUpdate.$addToSet.awardedActionIds = { $each: newlyAwardedIds };
-        }
-        xpGainedTotal = progressXp;
 
-        if (isCompletedNow && !wasCompletedBefore && challenge.challengeType === 'result') {
-          const completionBonus = getResultCompletionXp(challenge);
-          const completionUser = await User.findOneAndUpdate(
-            { 
-              _id: authUserId,
-              completedChallengesXpAwarded: { $ne: challenge._id }
-            },
-            { 
-              $inc: { xp: completionBonus + progressXp },
-              $addToSet: { 
-                completedChallengesXpAwarded: challenge._id,
-                ...(newlyAwardedIds.length > 0 ? { awardedActionIds: { $each: newlyAwardedIds } } : {})
-              }
-            },
-            { new: true, select: 'name email avatarUrl createdAt _id xp completedChallengesXpAwarded awardedActionIds' }
-          );
-
-          if (completionUser) {
-            xpGainedTotal += completionBonus;
-            updatedUser = completionUser;
-          } else {
-            // Already awarded completion bonus, just apply progress XP
-            updatedUser = await User.findByIdAndUpdate(
-              authUserId,
-              userUpdate,
-              { new: true, select: 'name email avatarUrl createdAt _id xp completedChallengesXpAwarded awardedActionIds' }
-            );
+        for (const actionId of newlyCheckedActionIds) {
+          const xpResult = await awardResultActionXp(authUserId, challenge._id, actionId);
+          putXpResults.push(xpResult);
+          if (xpResult.awarded && xpResult.user) {
+            updatedUser = xpResult.user;
           }
-        } else if (progressXp > 0) {
-          updatedUser = await User.findByIdAndUpdate(
-            authUserId,
-            userUpdate,
-            { new: true, select: 'name email avatarUrl createdAt _id xp completedChallengesXpAwarded awardedActionIds' }
-          );
-        } else {
-          updatedUser = user;
         }
+
+        if (!wasCompletedBeforePut && isCompletedNowPut) {
+          const completionXpResult = await awardResultCompletionXp(authUserId, challenge);
+          putXpResults.push(completionXpResult);
+          if (completionXpResult.awarded && completionXpResult.user) {
+            updatedUser = completionXpResult.user;
+          }
+        }
+
+        xpGainedTotal = putXpResults.reduce((sum, item) => sum + item.xpGained, 0);
       }
     }
 
@@ -624,7 +554,19 @@ router.put('/:id', async (req, res) => {
       xpGained: xpGainedTotal,
       xp: updatedUser?.xp,
       user: updatedUser,
-      debug: Object.keys(debug).length > 0 ? debug : undefined
+      ...(putXpResults.length > 0
+        ? {
+            xpAward: {
+              gained: xpGainedTotal,
+              events: putXpResults.map((item) => ({
+                awarded: item.awarded,
+                gained: item.xpGained,
+                reason: item.reason || null,
+                eventKey: item.eventKey || null
+              }))
+            }
+          }
+        : {})
     });
   } catch (error) {
     res.status(500).json({ message: 'Error updating challenge', error: error.message });
@@ -1016,72 +958,76 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
     }
 
     const prevCompletedDays = Array.isArray(challenge.participants[participantIndex].completedDays)
-      ? [...challenge.participants[participantIndex].completedDays]
+      ? challenge.participants[participantIndex].completedDays
       : [];
 
-    // Update completedDays for this participant
+    const prevCompletedDayKeys = new Set(
+      prevCompletedDays
+        .map((day) => normalizeDateLikeToYmd(day))
+        .filter(Boolean)
+    );
+
+    const addedDays = completedDays.filter((day) => !prevCompletedDayKeys.has(day));
+
     challenge.participants[participantIndex].completedDays = completedDays;
     await challenge.save();
 
-    // Award +5 XP only when today's date (UTC) is newly added
-    let xpGainedTotal = 0;
-    let updatedUser = null;
-    
-    const todayStr = getTodayUtcString();
-    const hadTodayBefore = prevCompletedDays.includes(todayStr);
-    const hasTodayNow = completedDays.includes(todayStr);
+    const userSelect = 'name email avatarUrl createdAt _id xp';
+    let updatedUser = await User.findById(userId).select(userSelect);
+    const xpResults = [];
 
-    if (!hadTodayBefore && hasTodayNow) {
-      const dailyXp = 5;
-      updatedUser = await User.findByIdAndUpdate(
-        userId,
-        { $inc: { xp: dailyXp } },
-        { new: true, select: 'name email avatarUrl createdAt _id xp completedChallengesXpAwarded' }
-      );
-      if (updatedUser) {
-        xpGainedTotal += dailyXp;
-      }
-    } else {
-      updatedUser = await User.findById(userId).select('name email avatarUrl createdAt _id xp completedChallengesXpAwarded');
-    }
-    
-    // Check if habit challenge is completed (end date passed) and award +100 XP if not already awarded
-    if (updatedUser) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const endDate = new Date(challenge.endDate);
-      endDate.setHours(0, 0, 0, 0);
-      
-      if (endDate < today) {
-        // For habit challenges: award if there are any completed days
-        if (completedDays.length > 0) {
-          const completionBonus = 100;
-          const completionUser = await User.findOneAndUpdate(
-            { 
-              _id: userId,
-              completedChallengesXpAwarded: { $ne: challenge._id }
-            },
-            { 
-              $inc: { xp: completionBonus },
-              $addToSet: { completedChallengesXpAwarded: challenge._id }
-            },
-            { new: true, select: 'name email avatarUrl createdAt _id xp completedChallengesXpAwarded' }
-          );
-          
-          if (completionUser) {
-            xpGainedTotal += completionBonus;
-            updatedUser = completionUser;
-          }
-        }
+    for (const day of addedDays) {
+      const xpResult = await awardHabitDayXp(userId, challenge._id, day);
+      xpResults.push(xpResult);
+      if (xpResult.awarded && xpResult.user) {
+        updatedUser = xpResult.user;
       }
     }
+
+    let completionXpResult = null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const endDate = new Date(challenge.endDate);
+    endDate.setHours(0, 0, 0, 0);
+
+    if (endDate < today && completedDays.length > 0) {
+      completionXpResult = await awardHabitCompletionXp(userId, challenge._id);
+      if (completionXpResult.awarded && completionXpResult.user) {
+        updatedUser = completionXpResult.user;
+      }
+    }
+
+    const dayXpGained = xpResults.reduce((sum, item) => sum + item.xpGained, 0);
+    const completionXpGained = completionXpResult?.xpGained || 0;
+    const xpGainedTotal = dayXpGained + completionXpGained;
+
+    const xpEvents = [
+      ...xpResults.map((item) => ({
+        awarded: item.awarded,
+        gained: item.xpGained,
+        reason: item.reason || null,
+        eventKey: item.eventKey || null
+      })),
+      ...(completionXpResult
+        ? [{
+            awarded: completionXpResult.awarded,
+            gained: completionXpResult.xpGained,
+            reason: completionXpResult.reason || null,
+            eventKey: completionXpResult.eventKey || null
+          }]
+        : [])
+    ];
 
     res.json({
       message: 'Completed days updated successfully',
       challenge,
       xpGained: xpGainedTotal,
       xp: updatedUser?.xp,
-      user: updatedUser
+      user: updatedUser,
+      xpAward: {
+        gained: xpGainedTotal,
+        events: xpEvents
+      }
     });
   } catch (error) {
     res.status(500).json({ message: 'Error updating completed days', error: error.message });
@@ -1444,19 +1390,17 @@ router.post('/:id/comments', async (req, res) => {
 
     const newComment = challenge.comments[challenge.comments.length - 1];
     
-    // Award +5 XP for first diary comment to active mission
     let xpGained = 0;
+    let xpAward = { awarded: false, gained: 0, reason: null };
     let finalUser = userId ? await User.findById(userId).select('xp') : null;
 
     if (userId) {
-      // Check if challenge is active (not finished)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const endDate = new Date(challenge.endDate);
       endDate.setHours(0, 0, 0, 0);
       const isActive = endDate >= today;
-      
-      // For result challenges, also check if all actions are done
+
       let isFinished = false;
       if (challenge.challengeType === 'result') {
         if (challenge.actions && Array.isArray(challenge.actions) && challenge.actions.length > 0) {
@@ -1471,25 +1415,18 @@ router.post('/:id/comments', async (req, res) => {
       } else {
         isFinished = endDate < today;
       }
-      
-      // Award XP only if challenge is active (not finished)
-      if (isActive && !isFinished) {
-        const commentBonus = 5;
-        const awardedUser = await User.findOneAndUpdate(
-          { 
-            _id: userId,
-            commentedChallengesXpAwarded: { $ne: challenge._id }
-          },
-          { 
-            $inc: { xp: commentBonus },
-            $addToSet: { commentedChallengesXpAwarded: challenge._id }
-          },
-          { new: true, select: 'xp' }
-        );
 
-        if (awardedUser) {
-          xpGained = commentBonus;
-          finalUser = awardedUser;
+      if (isActive && !isFinished) {
+        const xpResult = await awardFirstCommentXp(userId, challenge._id);
+        xpAward = {
+          awarded: xpResult.awarded,
+          gained: xpResult.xpGained,
+          reason: xpResult.reason || null
+        };
+
+        if (xpResult.awarded) {
+          xpGained = xpResult.xpGained;
+          finalUser = xpResult.user;
         }
       }
     }
@@ -1506,11 +1443,12 @@ router.post('/:id/comments', async (req, res) => {
       });
     }
     
-    res.status(201).json({ 
-      message: 'Comment added successfully', 
+    res.status(201).json({
+      message: 'Comment added successfully',
       comment: newComment,
       xpGained,
-      xp: finalUser?.xp
+      xp: finalUser?.xp,
+      xpAward
     });
   } catch (error) {
     res.status(500).json({ message: 'Error adding comment', error: error.message });
