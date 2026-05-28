@@ -106,9 +106,45 @@ async function enrichChallengesWithWatchState(challenges, viewerUserId, UserMode
   )
 }
 
+/**
+ * Returns the most popular active public habit challenge (main ritual), or null.
+ * Uses aggregation so only one document is loaded with full population.
+ */
+async function findMainRitualChallenge(ChallengeModel, { today = new Date() } = {}) {
+  const dayStart = new Date(today);
+  dayStart.setHours(0, 0, 0, 0);
+
+  const [top] = await ChallengeModel.aggregate([
+    {
+      $match: {
+        challengeType: 'habit',
+        privacy: { $ne: 'private' },
+        endDate: { $gte: dayStart }
+      }
+    },
+    {
+      $addFields: {
+        participantCount: { $size: { $ifNull: ['$participants', []] } }
+      }
+    },
+    { $sort: { participantCount: -1, createdAt: -1 } },
+    { $limit: 1 },
+    { $project: { _id: 1 } }
+  ]);
+
+  if (!top?._id) {
+    return null;
+  }
+
+  return ChallengeModel.findById(top._id)
+    .populate('owner', 'name avatarUrl')
+    .populate('participants.userId', 'name avatarUrl');
+}
+
 module.exports = {
   countCompletedActionItems,
   isResultChallengeCompleted,
   collectNewlyCheckedActionIds,
-  enrichChallengesWithWatchState
+  enrichChallengesWithWatchState,
+  findMainRitualChallenge
 };

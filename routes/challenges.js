@@ -7,7 +7,8 @@ const { findByClientDay, upsertChecklist } = require('../utils/dailyChecklistSer
 const {
   isResultChallengeCompleted,
   collectNewlyCheckedActionIds,
-  enrichChallengesWithWatchState
+  enrichChallengesWithWatchState,
+  findMainRitualChallenge
 } = require('../utils/challengeHelpers');
 const { getLocalizedCommentPush } = require('../utils/notificationMessages');
 const {
@@ -913,6 +914,28 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: error.message });
+  }
+});
+
+// Most popular active public habit challenge (featured main ritual card)
+router.get('/main-ritual', async (req, res) => {
+  try {
+    const challenge = await findMainRitualChallenge(Challenge);
+
+    if (!challenge) {
+      return res.json({ challenge: null });
+    }
+
+    const requestingUserId = decodeOptionalAuthUserId(req);
+    const [enriched] = await enrichChallengesWithWatchState(
+      [challenge],
+      requestingUserId,
+      User
+    );
+
+    res.json({ challenge: enriched ?? null });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching main ritual', error: error.message });
   }
 });
 
