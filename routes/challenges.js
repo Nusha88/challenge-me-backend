@@ -6,6 +6,7 @@ const { getClientDayRange, normalizeDateLikeToYmd } = require('../utils/dateHelp
 const { findByClientDay, upsertChecklist } = require('../utils/dailyChecklistService');
 const {
   isResultChallengeCompleted,
+  isHabitChallengeCompleted,
   collectNewlyCheckedActionIds,
   enrichChallengesWithWatchState,
   findMainRitualChallenge
@@ -18,6 +19,26 @@ const {
   awardResultActionXp,
   awardResultCompletionXp
 } = require('../utils/xpService');
+const {
+  awardHabitDaySparks,
+  awardMissionCompletionSparks,
+  awardChecklistTaskSparks
+} = require('../utils/sparksService');
+const { buildResultActionChecklistTaskKey } = require('../constants/sparksRules');
+const { buildRewardPayload } = require('../utils/rewardResponse');
+
+function serializeUserForClient(user) {
+  if (!user) return null;
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    avatarUrl: user.avatarUrl,
+    xp: user.xp || 0,
+    sparks: user.sparks || 0,
+    createdAt: user.createdAt
+  };
+}
 
 function decodeOptionalAuthUserId(req) {
   const authHeader = req.headers['authorization'];
@@ -355,18 +376,30 @@ router.patch('/:id/actions', async (req, res) => {
 
     let updatedUser = user;
     const xpResults = [];
+    const sparksResults = [];
 
     if (challenge.challengeType === 'result') {
       const newlyCheckedActionIds = collectNewlyCheckedActionIds(
         prevActions,
         challenge.actions
       );
+      const { clientDayStr: todayStr } = getClientDayRange(req, 0);
 
       for (const actionId of newlyCheckedActionIds) {
         const xpResult = await awardResultActionXp(authUserId, challenge._id, actionId);
         xpResults.push(xpResult);
         if (xpResult.awarded && xpResult.user) {
           updatedUser = xpResult.user;
+        }
+
+        const sparksResult = await awardChecklistTaskSparks(
+          authUserId,
+          todayStr,
+          buildResultActionChecklistTaskKey(challenge._id, actionId)
+        );
+        sparksResults.push(sparksResult);
+        if (sparksResult.awarded && sparksResult.user) {
+          updatedUser = sparksResult.user;
         }
       }
 
@@ -376,16 +409,14 @@ router.patch('/:id/actions', async (req, res) => {
         if (completionXpResult.awarded && completionXpResult.user) {
           updatedUser = completionXpResult.user;
         }
+
+        const missionSparksResult = await awardMissionCompletionSparks(authUserId, challenge._id);
+        sparksResults.push(missionSparksResult);
+        if (missionSparksResult.awarded && missionSparksResult.user) {
+          updatedUser = missionSparksResult.user;
+        }
       }
     }
-
-    const xpGainedTotal = xpResults.reduce((sum, item) => sum + item.xpGained, 0);
-    const xpEvents = xpResults.map((item) => ({
-      awarded: item.awarded,
-      gained: item.xpGained,
-      reason: item.reason || null,
-      eventKey: item.eventKey || null
-    }));
 
     if (challenge.challengeType === 'result') {
       try {
@@ -405,16 +436,16 @@ router.patch('/:id/actions', async (req, res) => {
       }
     }
 
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(await User.findById(authUserId).select('name email avatarUrl xp sparks createdAt _id')),
+      xpResults,
+      sparksResults
+    });
+
     res.json({
       message: 'Actions updated successfully',
       challenge,
-      xpGained: xpGainedTotal,
-      xp: updatedUser?.xp,
-      user: updatedUser,
-      xpAward: {
-        gained: xpGainedTotal,
-        events: xpEvents
-      }
+      ...rewardPayload
     });
   } catch (error) {
     res.status(500).json({ message: 'Error updating actions', error: error.message });
@@ -498,9 +529,9 @@ router.put('/:id', async (req, res) => {
       }
     );
 
-    let xpGainedTotal = 0;
     let updatedUser = null;
     const putXpResults = [];
+    const putSparksResults = [];
 
     if (actions !== undefined && authUserId && challenge.challengeType === 'result') {
       const user = await User.findById(authUserId);
@@ -511,12 +542,23 @@ router.put('/:id', async (req, res) => {
           prevActions,
           challenge.actions
         );
+        const { clientDayStr: todayStr } = getClientDayRange(req, 0);
 
         for (const actionId of newlyCheckedActionIds) {
           const xpResult = await awardResultActionXp(authUserId, challenge._id, actionId);
           putXpResults.push(xpResult);
           if (xpResult.awarded && xpResult.user) {
             updatedUser = xpResult.user;
+          }
+
+          const sparksResult = await awardChecklistTaskSparks(
+            authUserId,
+            todayStr,
+            buildResultActionChecklistTaskKey(challenge._id, actionId)
+          );
+          putSparksResults.push(sparksResult);
+          if (sparksResult.awarded && sparksResult.user) {
+            updatedUser = sparksResult.user;
           }
         }
 
@@ -526,9 +568,13 @@ router.put('/:id', async (req, res) => {
           if (completionXpResult.awarded && completionXpResult.user) {
             updatedUser = completionXpResult.user;
           }
-        }
 
-        xpGainedTotal = putXpResults.reduce((sum, item) => sum + item.xpGained, 0);
+          const missionSparksResult = await awardMissionCompletionSparks(authUserId, challenge._id);
+          putSparksResults.push(missionSparksResult);
+          if (missionSparksResult.awarded && missionSparksResult.user) {
+            updatedUser = missionSparksResult.user;
+          }
+        }
       }
     }
 
@@ -550,25 +596,22 @@ router.put('/:id', async (req, res) => {
       await challenge.save();
     }
 
+    const putRewardPayload = (putXpResults.length > 0 || putSparksResults.length > 0)
+      ? buildRewardPayload({
+          user: serializeUserForClient(
+            authUserId
+              ? await User.findById(authUserId).select('name email avatarUrl xp sparks createdAt _id')
+              : updatedUser
+          ),
+          xpResults: putXpResults,
+          sparksResults: putSparksResults
+        })
+      : {};
+
     res.json({
       message: 'Challenge updated successfully',
       challenge,
-      xpGained: xpGainedTotal,
-      xp: updatedUser?.xp,
-      user: updatedUser,
-      ...(putXpResults.length > 0
-        ? {
-            xpAward: {
-              gained: xpGainedTotal,
-              events: putXpResults.map((item) => ({
-                awarded: item.awarded,
-                gained: item.xpGained,
-                reason: item.reason || null,
-                eventKey: item.eventKey || null
-              }))
-            }
-          }
-        : {})
+      ...putRewardPayload
     });
   } catch (error) {
     res.status(500).json({ message: 'Error updating challenge', error: error.message });
@@ -979,9 +1022,15 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
       return res.status(403).json({ message: 'You are not authorized to update this progress' });
     }
 
-    const prevCompletedDays = Array.isArray(challenge.participants[participantIndex].completedDays)
-      ? challenge.participants[participantIndex].completedDays
+    const prevParticipant = challenge.participants[participantIndex];
+    const prevCompletedDays = Array.isArray(prevParticipant.completedDays)
+      ? prevParticipant.completedDays
       : [];
+
+    const wasHabitCompletedBefore = isHabitChallengeCompleted(challenge, {
+      ...prevParticipant.toObject?.() || prevParticipant,
+      completedDays: prevCompletedDays
+    });
 
     const prevCompletedDayKeys = new Set(
       prevCompletedDays
@@ -994,15 +1043,22 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
     challenge.participants[participantIndex].completedDays = completedDays;
     await challenge.save();
 
-    const userSelect = 'name email avatarUrl createdAt _id xp';
+    const userSelect = 'name email avatarUrl createdAt _id xp sparks';
     let updatedUser = await User.findById(userId).select(userSelect);
     const xpResults = [];
+    const sparksResults = [];
 
     for (const day of addedDays) {
       const xpResult = await awardHabitDayXp(userId, challenge._id, day);
       xpResults.push(xpResult);
       if (xpResult.awarded && xpResult.user) {
         updatedUser = xpResult.user;
+      }
+
+      const sparksResult = await awardHabitDaySparks(userId, challenge._id, day);
+      sparksResults.push(sparksResult);
+      if (sparksResult.awarded && sparksResult.user) {
+        updatedUser = sparksResult.user;
       }
     }
 
@@ -1019,37 +1075,31 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
       }
     }
 
-    const dayXpGained = xpResults.reduce((sum, item) => sum + item.xpGained, 0);
-    const completionXpGained = completionXpResult?.xpGained || 0;
-    const xpGainedTotal = dayXpGained + completionXpGained;
+    const updatedParticipant = challenge.participants[participantIndex];
+    const isHabitCompletedNow = isHabitChallengeCompleted(challenge, updatedParticipant);
 
-    const xpEvents = [
-      ...xpResults.map((item) => ({
-        awarded: item.awarded,
-        gained: item.xpGained,
-        reason: item.reason || null,
-        eventKey: item.eventKey || null
-      })),
-      ...(completionXpResult
-        ? [{
-            awarded: completionXpResult.awarded,
-            gained: completionXpResult.xpGained,
-            reason: completionXpResult.reason || null,
-            eventKey: completionXpResult.eventKey || null
-          }]
-        : [])
-    ];
+    if (!wasHabitCompletedBefore && isHabitCompletedNow) {
+      const missionSparksResult = await awardMissionCompletionSparks(userId, challenge._id);
+      sparksResults.push(missionSparksResult);
+      if (missionSparksResult.awarded && missionSparksResult.user) {
+        updatedUser = missionSparksResult.user;
+      }
+    }
+
+    if (completionXpResult) {
+      xpResults.push(completionXpResult);
+    }
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(updatedUser),
+      xpResults,
+      sparksResults
+    });
 
     res.json({
       message: 'Completed days updated successfully',
       challenge,
-      xpGained: xpGainedTotal,
-      xp: updatedUser?.xp,
-      user: updatedUser,
-      xpAward: {
-        gained: xpGainedTotal,
-        events: xpEvents
-      }
+      ...rewardPayload
     });
   } catch (error) {
     res.status(500).json({ message: 'Error updating completed days', error: error.message });

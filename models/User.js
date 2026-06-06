@@ -73,6 +73,24 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: Number,
     default: 0
   },
+  sparks: {
+    type: Number,
+    default: 0
+  },
+  awardedSparksEventKeys: {
+    type: [String],
+    default: []
+  },
+  sparksDailyCap: {
+    clientDay: {
+      type: String,
+      default: null
+    },
+    amount: {
+      type: Number,
+      default: 0
+    }
+  },
   awardedXpEventKeys: {
     type: [String],
     default: []

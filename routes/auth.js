@@ -24,6 +24,13 @@ const {
   awardChecklistTaskXp,
   awardStreakMilestoneXp
 } = require('../utils/xpService');
+const {
+  awardChecklistTaskSparks,
+  awardStreakMilestoneSparks,
+  awardManifestSparks
+} = require('../utils/sparksService');
+const { buildChecklistTaskAwardKey, buildResultActionChecklistTaskKey } = require('../constants/sparksRules');
+const { buildRewardPayload } = require('../utils/rewardResponse');
 
 function serializeUserForClient(user) {
   if (!user) return null;
@@ -33,6 +40,7 @@ function serializeUserForClient(user) {
     email: user.email,
     avatarUrl: user.avatarUrl,
     xp: user.xp || 0,
+    sparks: user.sparks || 0,
     createdAt: user.createdAt
   };
 }
@@ -85,6 +93,7 @@ router.get('/users', async (req, res) => {
       email: 1,
       avatarUrl: 1,
       xp: 1,
+      sparks: 1,
       createdAt: 1,
       _id: 1
     }).sort({ createdAt: -1 });
@@ -154,6 +163,7 @@ router.get('/users/:id', async (req, res) => {
       email: 1,
       avatarUrl: 1,
       xp: 1,
+      sparks: 1,
       createdAt: 1,
       _id: 1,
       dailyChecklists: 1
@@ -226,7 +236,8 @@ router.post('/register', async (req, res) => {
       email: normalizedEmail,
       avatarUrl: req.body.avatarUrl || '',
       password: hashedPassword,
-      xp: 0
+      xp: 0,
+      sparks: 0
     });
     await user.save();
     // Generate JWT
@@ -240,6 +251,7 @@ router.post('/register', async (req, res) => {
         email: user.email,
         avatarUrl: user.avatarUrl,
         xp: user.xp || 0,
+        sparks: user.sparks || 0,
         createdAt: user.createdAt
       }
     });
@@ -288,6 +300,7 @@ router.post('/login', async (req, res) => {
         email: user.email,
         avatarUrl: user.avatarUrl,
         xp: user.xp || 0,
+        sparks: user.sparks || 0,
         createdAt: user.createdAt
       }
     });
@@ -305,13 +318,24 @@ router.get('/profile', authenticateToken, async (req, res) => {
       email: 1,
       avatarUrl: 1,
       xp: 1,
+      sparks: 1,
       createdAt: 1,
       _id: 1
     });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    res.json({ user });
+    res.json({
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+        xp: user.xp || 0,
+        sparks: user.sparks || 0,
+        createdAt: user.createdAt
+      }
+    });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching profile', error: error.message });
   }
@@ -328,14 +352,18 @@ router.post('/xp/daily-bonus', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(user),
+      xpResults: [xpResult],
+      sparksResults: []
+    });
+
     res.json({
       awarded: xpResult.awarded,
-      xpGained: xpResult.xpGained,
-      xp: user.xp || 0,
       date: todayStr,
-      user: serializeUserForClient(user),
+      ...rewardPayload,
       xpAward: {
-        gained: xpResult.xpGained,
+        gained: rewardPayload.xpGained,
         events: [{
           awarded: xpResult.awarded,
           gained: xpResult.xpGained,
@@ -347,6 +375,44 @@ router.post('/xp/daily-bonus', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error awarding daily bonus XP:', error);
     res.status(500).json({ message: 'Error awarding daily bonus XP', error: error.message });
+  }
+});
+
+router.post('/sparks/manifest', authenticateToken, async (req, res) => {
+  try {
+    const { type, challengeId } = req.body;
+    const manifestType = type === 'invite' ? 'invite' : 'victory';
+
+    if (manifestType === 'invite' && !challengeId) {
+      return res.status(400).json({ message: 'challengeId is required for invite manifest' });
+    }
+
+    const { clientDayStr: todayStr } = getClientDayRange(req, 0);
+    const sparksResult = await awardManifestSparks(req.user.id, {
+      type: manifestType,
+      localDate: todayStr,
+      challengeId: challengeId || null
+    });
+    const user = sparksResult.user || await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(user),
+      xpResults: [],
+      sparksResults: [sparksResult]
+    });
+
+    res.json({
+      awarded: sparksResult.awarded,
+      clientDay: todayStr,
+      ...rewardPayload
+    });
+  } catch (error) {
+    console.error('Error awarding manifest sparks:', error);
+    res.status(500).json({ message: 'Error awarding manifest sparks', error: error.message });
   }
 });
 
@@ -463,7 +529,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.user.id,
       { $set: updates },
-      { new: true, select: 'name email avatarUrl createdAt _id' }
+      { new: true, select: 'name email avatarUrl xp sparks createdAt _id' }
     );
 
     if (!user) {
@@ -537,12 +603,18 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
 
     const prevTasks = existingTodayChecklist?.tasks || [];
     const xpResults = [];
+    const sparksResults = [];
+    const prevDoneMap = new Map(
+      prevTasks.map((task, index) => [buildChecklistTaskAwardKey(task, index), Boolean(task?.done)])
+    );
 
     for (let i = 0; i < tasks.length; i++) {
-      const wasDone = Boolean(prevTasks[i]?.done);
+      const taskKey = buildChecklistTaskAwardKey(tasks[i], i);
+      const wasDone = prevDoneMap.get(taskKey) || false;
       const isDone = Boolean(tasks[i]?.done);
       if (!wasDone && isDone) {
         xpResults.push(await awardChecklistTaskXp(user._id, todayStr, i));
+        sparksResults.push(await awardChecklistTaskSparks(user._id, todayStr, taskKey));
       }
     }
 
@@ -619,15 +691,19 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       }
     }
     
+    if (currentStreak === 3) {
+      sparksResults.push(await awardStreakMilestoneSparks(user._id, 3, todayStr));
+    }
+
     if (currentStreak >= 7) {
       xpResults.push(await awardStreakMilestoneXp(user._id, 7));
     }
 
-    const xpGained = xpResults.reduce((sum, item) => sum + item.xpGained, 0);
-    const latestUser = xpResults.reduce(
-      (acc, item) => (item.user ? item.user : acc),
-      await User.findById(user._id)
-    );
+    if (currentStreak === 7) {
+      sparksResults.push(await awardStreakMilestoneSparks(user._id, 7, todayStr));
+    }
+
+    const latestUser = await User.findById(user._id).select('name email avatarUrl xp sparks createdAt _id');
     const updatedChecklist = await findByClientDay(
       user._id,
       todayStr,
@@ -636,21 +712,16 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       todayEndUtc
     );
 
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(latestUser),
+      xpResults,
+      sparksResults
+    });
+
     res.json({
       message: 'Checklist updated successfully',
       checklist: serializeChecklistForClientDay(updatedChecklist, todayStr),
-      xpGained,
-      xp: latestUser?.xp || 0,
-      user: serializeUserForClient(latestUser),
-      xpAward: {
-        gained: xpGained,
-        events: xpResults.map((item) => ({
-          awarded: item.awarded,
-          gained: item.xpGained,
-          reason: item.reason || null,
-          eventKey: item.eventKey || null
-        }))
-      }
+      ...rewardPayload
     });
   } catch (error) {
     console.error('Error updating checklist:', error);
@@ -741,6 +812,7 @@ router.put('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
         email: user.email,
         avatarUrl: user.avatarUrl,
         xp: user.xp || 0,
+        sparks: user.sparks || 0,
         createdAt: user.createdAt
       }
     });

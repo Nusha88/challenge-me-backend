@@ -141,9 +141,55 @@ async function findMainRitualChallenge(ChallengeModel, { today = new Date() } = 
     .populate('participants.userId', 'name avatarUrl');
 }
 
+const { normalizeDateLikeToYmd } = require('./dateHelpers');
+
+function countScheduledMissionDays(startDate, endDate, frequency = 'daily') {
+  const startKey = normalizeDateLikeToYmd(startDate);
+  const endKey = normalizeDateLikeToYmd(endDate);
+  if (!startKey || !endKey) return 0;
+
+  const start = new Date(`${startKey}T00:00:00Z`);
+  const end = new Date(`${endKey}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 0;
+
+  let count = 0;
+  const current = new Date(start);
+  let dayIndex = 0;
+
+  while (current <= end) {
+    const isScheduled = frequency !== 'everyOtherDay' || (dayIndex % 2 === 0);
+    if (isScheduled) count += 1;
+    current.setUTCDate(current.getUTCDate() + 1);
+    dayIndex += 1;
+  }
+
+  return count;
+}
+
+function isHabitChallengeCompleted(challenge, participant) {
+  if (!challenge || !participant) return false;
+
+  const totalScheduled = countScheduledMissionDays(
+    challenge.startDate,
+    challenge.endDate,
+    challenge.frequency
+  );
+  if (totalScheduled <= 0) return false;
+
+  const completedDayKeys = new Set(
+    (participant.completedDays || [])
+      .map((day) => normalizeDateLikeToYmd(day))
+      .filter(Boolean)
+  );
+
+  return completedDayKeys.size >= totalScheduled;
+}
+
 module.exports = {
   countCompletedActionItems,
   isResultChallengeCompleted,
+  isHabitChallengeCompleted,
+  countScheduledMissionDays,
   collectNewlyCheckedActionIds,
   enrichChallengesWithWatchState,
   findMainRitualChallenge
