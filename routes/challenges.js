@@ -1314,17 +1314,19 @@ router.get('/watched/:userId', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const challenge = await Challenge.findById(id)
-      .populate('owner', 'name avatarUrl')
-      .populate('participants.userId', 'name avatarUrl');
+    const User = require('../models/User');
+
+    const [challenge, watchersCount] = await Promise.all([
+      Challenge.findById(id)
+        .populate('owner', 'name avatarUrl')
+        .populate('participants.userId', 'name avatarUrl'),
+      User.countDocuments({ watchedChallenges: id })
+    ]);
     
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
     
-    // Add watchers count
-    const User = require('../models/User');
-    const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
     const challengeObj = challenge.toObject();
     challengeObj.watchersCount = watchersCount;
     
