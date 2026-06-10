@@ -1,7 +1,17 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Notification = require('../models/Notification');
 const authenticateToken = require('../middleware/authenticateToken');
+
+function normalizeUserId(userId) {
+  if (!userId) return null;
+  try {
+    return new mongoose.Types.ObjectId(String(userId));
+  } catch {
+    return null;
+  }
+}
 
 function assertSelf(req, res, userId) {
   if (String(req.user.id) !== String(userId)) {
@@ -17,9 +27,14 @@ router.get('/:userId', authenticateToken, async (req, res) => {
     const { userId } = req.params;
     if (!assertSelf(req, res, userId)) return;
 
+    const normalizedUserId = normalizeUserId(userId);
+    if (!normalizedUserId) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+
     const { limit = 50, unreadOnly = false } = req.query;
 
-    const query = { userId };
+    const query = { userId: normalizedUserId };
     if (unreadOnly === 'true') {
       query.read = false;
     }
@@ -42,7 +57,12 @@ router.get('/:userId/unread-count', authenticateToken, async (req, res) => {
     const { userId } = req.params;
     if (!assertSelf(req, res, userId)) return;
 
-    const count = await Notification.countDocuments({ userId, read: false });
+    const normalizedUserId = normalizeUserId(userId);
+    if (!normalizedUserId) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+
+    const count = await Notification.countDocuments({ userId: normalizedUserId, read: false });
     res.json({ count });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching unread count', error: error.message });
@@ -78,8 +98,13 @@ router.put('/:userId/read-all', authenticateToken, async (req, res) => {
     const { userId } = req.params;
     if (!assertSelf(req, res, userId)) return;
 
+    const normalizedUserId = normalizeUserId(userId);
+    if (!normalizedUserId) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+
     const result = await Notification.updateMany(
-      { userId, read: false },
+      { userId: normalizedUserId, read: false },
       { read: true }
     );
 
