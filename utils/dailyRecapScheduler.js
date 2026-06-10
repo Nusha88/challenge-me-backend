@@ -1,10 +1,9 @@
 const User = require('../models/User');
 const Challenge = require('../models/Challenge');
-const Notification = require('../models/Notification');
-const { sendPushNotification } = require('./pushService');
 const { findForRecapBatch } = require('./dailyChecklistService');
 const { toLocalDateKey, getLocalParts } = require('./dateHelpers');
 const { groupChallengesByUserId, getUserDailyProgress } = require('./dailyProgress');
+const { sendDailyRecapNotification } = require('./notificationService');
 
 const CHECK_EVERY_MS = 60 * 1000;
 const RECAP_SEND_WINDOW_MINUTES = 10;
@@ -52,28 +51,6 @@ function isWithinSendWindow(now, targetTime, timeZone, windowMinutes = RECAP_SEN
   return currentMinutes >= targetMinutes || currentMinutes < (endMinutes % minutesInDay);
 }
 
-function getLocalizedRecap(userLanguage) {
-  const language = userLanguage === 'ru' ? 'ru' : 'en';
-
-  if (language === 'ru') {
-    return {
-      title: 'Итоги дня',
-      bodies: [
-        'Миссии дня еще активны. Сделаем финальный рывок?',
-        'До завершения сегодняшнего плана осталось совсем немного.'
-      ]
-    };
-  }
-
-  return {
-    title: 'Daily Recap',
-    bodies: [
-      "Today's missions are still active. Shall we make a final push?",
-      "Only a little remains to complete today's plan."
-    ]
-  };
-}
-
 function isUserDueForRecapTick(user, now) {
   const tz = user.dailyRecapTimezone || 'UTC';
   const localDate = toLocalDateKey(now, tz);
@@ -94,31 +71,9 @@ async function processUserDailyRecap(user, now, challenges, checklistByUserAndDa
   const checklist = checklistByUserAndDate.get(`${user._id}:${localDate}`) || null;
   const progress = await getUserDailyProgress(user, now, { challenges, checklist });
 
-  if (progress.isEmpty) return;
-  if (!progress.isStarted || progress.isComplete) return;
+  if (progress.isEmpty || progress.isComplete) return;
 
-  const localized = getLocalizedRecap(user.dailyRecapLanguage);
-  const body = localized.bodies[Math.floor(Math.random() * localized.bodies.length)];
-
-  const notification = await Notification.create({
-    userId: user._id,
-    type: 'daily_recap',
-    title: localized.title,
-    body,
-    localDate,
-    read: false
-  });
-
-  await sendPushNotification(user._id, {
-    title: localized.title,
-    body,
-    tag: 'daily-recap',
-    data: {
-      type: 'daily-recap',
-      notificationId: notification._id.toString(),
-      localDate
-    }
-  });
+  await sendDailyRecapNotification(user, localDate);
 
   user.dailyRecapLastSentLocalDate = localDate;
   await user.save();
@@ -153,7 +108,7 @@ async function runDailyRecapTick() {
       Challenge.find({
         challengeType: 'habit',
         'participants.userId': { $in: dueUserIds }
-      }).select('startDate endDate participants'),
+      }).select('startDate endDate frequency participants'),
       findForRecapBatch(dueUsers, now)
     ]);
 

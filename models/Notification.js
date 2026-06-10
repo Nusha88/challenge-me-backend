@@ -10,7 +10,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['mention', 'comment', 'reply', 'join', 'watch', 'daily_recap'],
+      enum: ['mention', 'comment', 'join', 'watch', 'daily_recap'],
       required: true
     },
     title: {
@@ -56,17 +56,14 @@ const notificationSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
       index: true
-    },
-    createdAt: {
-      type: Date,
-      default: Date.now,
-      index: true
     }
   },
   {
-    timestamps: true
+    timestamps: { createdAt: true, updatedAt: false }
   }
 );
+
+notificationSchema.index({ createdAt: -1 });
 
 // Index for efficient queries
 notificationSchema.index({ userId: 1, read: 1, createdAt: -1 });

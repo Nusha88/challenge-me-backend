@@ -56,8 +56,7 @@ async function upsertChecklist({ userId, localDate, timeZone, tasks, anchorDate 
       $set: {
         tasks: normalizeTasks(tasks),
         timeZone: timeZone || 'UTC',
-        date: anchorDate,
-        updatedAt: new Date()
+        date: anchorDate
       }
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }

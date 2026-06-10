@@ -5,7 +5,8 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "test": "node utils/dailyProgress.test.js && node utils/watchedFeedService.test.js && node utils/usersListService.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

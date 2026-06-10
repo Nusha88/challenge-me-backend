@@ -50,10 +50,6 @@ const dailyChecklistSchema = new mongoose.Schema({
   tasks: {
     type: [dailyChecklistTaskSchema],
     default: []
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
   }
 });
 

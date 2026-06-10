@@ -31,6 +31,7 @@ const {
 } = require('../utils/sparksService');
 const { buildChecklistTaskAwardKey, buildResultActionChecklistTaskKey } = require('../constants/sparksRules');
 const { buildRewardPayload } = require('../utils/rewardResponse');
+const { fetchPaginatedUsers } = require('../utils/usersListService');
 
 function serializeUserForClient(user) {
   if (!user) return null;
@@ -70,70 +71,21 @@ router.get('/users', async (req, res) => {
       });
     }
     
-    // Pagination parameters
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 21;
-    const skip = (page - 1) * limit;
-    
-    // Search parameter
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 21;
     const searchQuery = req.query.search ? req.query.search.trim() : null;
-    
-    // Build query with optional search filter
-    const userQuery = {};
-    if (searchQuery) {
-      userQuery.name = { $regex: searchQuery, $options: 'i' }; // Case-insensitive search
-    }
-    
-    // Get total count for pagination (with search filter if applicable)
-    const totalUsers = await User.countDocuments(userQuery);
-    
-    // Fetch users with optional search filter, sorted by createdAt descending (we'll sort by challengeCount after getting counts)
-    const users = await User.find(userQuery, {
-      name: 1,
-      email: 1,
-      avatarUrl: 1,
-      xp: 1,
-      sparks: 1,
-      createdAt: 1,
-      _id: 1
-    }).sort({ createdAt: -1 });
-    
-    // Get challenge counts for each user (excluding private challenges)
-    const usersWithCounts = await Promise.all(users.map(async (user) => {
-      const challengeCount = await Challenge.countDocuments({
-        $or: [
-          { owner: user._id },
-          { 'participants.userId': user._id }
-        ],
-        privacy: { $ne: 'private' } // Exclude private challenges
-      });
-      return {
-        ...user.toObject(),
-        challengeCount
-      };
-    }));
-    
-    // Sort by challengeCount descending
-    usersWithCounts.sort((a, b) => {
-      const countA = a.challengeCount || 0;
-      const countB = b.challengeCount || 0;
-      return countB - countA;
+
+    const { users, totalUsers, pagination } = await fetchPaginatedUsers(User, {
+      searchQuery,
+      page,
+      limit
     });
-    
-    // Apply pagination after sorting
-    const paginatedUsers = usersWithCounts.slice(skip, skip + limit);
-    const hasMore = skip + limit < usersWithCounts.length;
-    
+
     res.json({
       message: 'Users retrieved successfully',
-      users: paginatedUsers,
-      totalUsers: totalUsers,
-      pagination: {
-        page,
-        limit,
-        total: totalUsers,
-        hasMore
-      }
+      users,
+      totalUsers,
+      pagination
     });
   } catch (error) {
     console.error('Error in /users endpoint:', error);

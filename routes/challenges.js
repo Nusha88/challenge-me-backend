@@ -11,7 +11,11 @@ const {
   enrichChallengesWithWatchState,
   findMainRitualChallenge
 } = require('../utils/challengeHelpers');
-const { getLocalizedCommentPush } = require('../utils/notificationMessages');
+const {
+  notifyChallengeCommentRecipient,
+  notifyChallengeJoin,
+  notifyChallengeWatch
+} = require('../utils/notificationService');
 const {
   awardFirstCommentXp,
   awardHabitDayXp,
@@ -26,6 +30,7 @@ const {
 } = require('../utils/sparksService');
 const { buildResultActionChecklistTaskKey } = require('../constants/sparksRules');
 const { buildRewardPayload } = require('../utils/rewardResponse');
+const { buildWatchedFeedActivities } = require('../utils/watchedFeedService');
 
 function serializeUserForClient(user) {
   if (!user) return null;
@@ -52,62 +57,6 @@ function decodeOptionalAuthUserId(req) {
     return decoded?.id || null;
   } catch {
     return null;
-  }
-}
-
-/** In-app + push notification for diary activity (owner comment or @mention in reply). */
-async function notifyChallengeCommentRecipient({
-  recipientUserId,
-  fromUserId,
-  challenge,
-  type,
-  commentId,
-  replyId = null
-}) {
-  if (!recipientUserId || !fromUserId || !challenge) return;
-  if (recipientUserId.toString() === fromUserId.toString()) return;
-
-  const Notification = require('../models/Notification');
-  const { sendPushNotification } = require('../utils/pushService');
-
-  try {
-    const notification = await Notification.create({
-      userId: recipientUserId,
-      type,
-      challengeId: challenge._id,
-      commentId: commentId || null,
-      replyId: replyId || null,
-      fromUserId,
-      read: false
-    });
-
-    const [fromUser, recipientUser] = await Promise.all([
-      User.findById(fromUserId).select('name'),
-      User.findById(recipientUserId).select('dailyRecapLanguage')
-    ]);
-    const fromName = fromUser?.name;
-    const missionTitle = challenge.title;
-    const isReplyToUser = type === 'mention' || replyId != null;
-    const { title: pushTitle, body: pushBody } = getLocalizedCommentPush(
-      type,
-      fromName,
-      missionTitle,
-      recipientUser?.dailyRecapLanguage,
-      isReplyToUser
-    );
-
-    await sendPushNotification(recipientUserId, {
-      title: pushTitle,
-      body: pushBody,
-      data: {
-        notificationId: notification._id.toString(),
-        challengeId: challenge._id.toString(),
-        type
-      },
-      tag: `challenge-${challenge._id}`
-    });
-  } catch (notificationError) {
-    console.error('Error creating comment/mention notification:', notificationError);
   }
 }
 
@@ -274,7 +223,7 @@ function isChallengeCompleted(challenge, today) {
 // Create challenge
 router.post('/', async (req, res) => {
   try {
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments, difficulty, reward } = req.body;
+    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward } = req.body;
 
     if (!title || !startDate || !endDate || !owner) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -311,9 +260,6 @@ router.post('/', async (req, res) => {
     }
     if (challengeType === 'result') {
       challengeData.reward = typeof reward === 'string' ? reward.trim() : '';
-    }
-    if (completedDays && challengeType === 'habit') {
-      challengeData.completedDays = completedDays;
     }
     if (allowComments !== undefined) {
       challengeData.allowComments = allowComments;
@@ -652,39 +598,8 @@ router.post('/:id/join', async (req, res) => {
     challenge.participants.push({ userId, completedDays: [] });
     await challenge.save();
 
-    // Create notification for challenge owner if they are not the one joining
     const ownerId = challenge.owner?._id || challenge.owner;
-    if (ownerId && ownerId.toString() !== userId.toString()) {
-      const Notification = require('../models/Notification');
-      const { sendPushNotification } = require('../utils/pushService');
-      const User = require('../models/User');
-      
-      try {
-        const notification = await Notification.create({
-          userId: ownerId,
-          type: 'join',
-          challengeId: challenge._id,
-          fromUserId: userId,
-          read: false
-        });
-        
-        // Send push notification
-        const fromUser = await User.findById(userId, 'name');
-        await sendPushNotification(ownerId, {
-          title: 'New Participant',
-          body: `${fromUser?.name || 'Someone'} joined your challenge "${challenge.title}"`,
-          data: {
-            notificationId: notification._id.toString(),
-            challengeId: challenge._id.toString(),
-            type: 'join'
-          },
-          tag: `challenge-${challenge._id}`
-        });
-      } catch (notificationError) {
-        // Log error but don't fail the join operation
-        console.error('Error creating join notification:', notificationError);
-      }
-    }
+    await notifyChallengeJoin({ ownerId, fromUserId: userId, challenge });
 
     res.json({
       message: 'Successfully joined the challenge',
@@ -1236,6 +1151,64 @@ router.get('/user/:userId', async (req, res) => {
   }
 });
 
+// Watched feed (must be before /watched/:userId and /:id)
+router.get('/watched/feed/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const authUserId = decodeOptionalAuthUserId(req);
+
+    if (authUserId && authUserId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to view this feed' });
+    }
+
+    const user = await User.findById(userId).select('watchedChallenges');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.watchedChallenges?.length) {
+      return res.json({ activities: [] });
+    }
+
+    const challenges = await Challenge.find({ _id: { $in: user.watchedChallenges } })
+      .select('title allowComments participants comments endDate challengeType actions')
+      .populate('participants.userId', 'name avatarUrl')
+      .populate('comments.userId', 'name avatarUrl');
+
+    const activities = buildWatchedFeedActivities(challenges);
+
+    res.json({ activities });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching watched feed', error: error.message });
+  }
+});
+
+// Get watched challenges for a user (must be before /:id)
+router.get('/watched/:userId', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId).populate('watchedChallenges');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const challenges = await Challenge.find({ _id: { $in: user.watchedChallenges } })
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl')
+      .sort({ createdAt: -1 });
+
+    const challengesWithWatchers = await Promise.all(challenges.map(async (challenge) => {
+      const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
+      const challengeObj = challenge.toObject();
+      challengeObj.watchersCount = watchersCount;
+      return challengeObj;
+    }));
+
+    res.json({ challenges: challengesWithWatchers });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching watched challenges', error: error.message });
+  }
+});
+
 // Get challenge by ID (must be after more specific routes like /user/:userId)
 router.get('/:id', async (req, res) => {
   try {
@@ -1308,39 +1281,8 @@ router.post('/:id/watch', async (req, res) => {
     user.watchedChallenges.push(challenge._id);
     await user.save();
 
-    // Create notification for challenge owner if they are not the one watching
     const ownerId = challenge.owner?._id || challenge.owner;
-    if (ownerId && ownerId.toString() !== userId.toString()) {
-      const Notification = require('../models/Notification');
-      const { sendPushNotification } = require('../utils/pushService');
-      const User = require('../models/User');
-      
-      try {
-        const notification = await Notification.create({
-          userId: ownerId,
-          type: 'watch',
-          challengeId: challenge._id,
-          fromUserId: userId,
-          read: false
-        });
-        
-        // Send push notification
-        const fromUser = await User.findById(userId, 'name');
-        await sendPushNotification(ownerId, {
-          title: 'New Follower',
-          body: `${fromUser?.name || 'Someone'} started watching your challenge "${challenge.title}"`,
-          data: {
-            notificationId: notification._id.toString(),
-            challengeId: challenge._id.toString(),
-            type: 'watch'
-          },
-          tag: `challenge-${challenge._id}`
-        });
-      } catch (notificationError) {
-        // Log error but don't fail the watch operation
-        console.error('Error creating watch notification:', notificationError);
-      }
-    }
+    await notifyChallengeWatch({ ownerId, fromUserId: userId, challenge });
 
     res.json({ message: 'Challenge added to watch list', watchedChallenges: user.watchedChallenges });
   } catch (error) {
@@ -1376,34 +1318,6 @@ router.post('/:id/unwatch', async (req, res) => {
     res.json({ message: 'Challenge removed from watch list', watchedChallenges: user.watchedChallenges });
   } catch (error) {
     res.status(500).json({ message: 'Error unwatching challenge', error: error.message });
-  }
-});
-
-// Get watched challenges for a user
-router.get('/watched/:userId', async (req, res) => {
-  try {
-    const user = await User.findById(req.params.userId).populate('watchedChallenges');
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Populate challenge details
-    const challenges = await Challenge.find({ _id: { $in: user.watchedChallenges } })
-      .populate('owner', 'name avatarUrl')
-      .populate('participants.userId', 'name avatarUrl')
-      .sort({ createdAt: -1 });
-
-    // Add watchers count to each challenge
-    const challengesWithWatchers = await Promise.all(challenges.map(async (challenge) => {
-      const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
-      const challengeObj = challenge.toObject();
-      challengeObj.watchersCount = watchersCount;
-      return challengeObj;
-    }));
-
-    res.json({ challenges: challengesWithWatchers });
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching watched challenges', error: error.message });
   }
 });
 

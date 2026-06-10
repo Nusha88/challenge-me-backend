@@ -23,14 +23,33 @@ function isDateWithinRange(localDate, startDate, endDate) {
   return localDate >= startKey && localDate <= endKey;
 }
 
-function isChallengeActiveOnLocalDate(challenge, localDate) {
+function isHabitFinished(challenge, localDate) {
+  const { endKey } = getMissionDateKeys(challenge);
+  if (!localDate || !endKey) return false;
+  return localDate > endKey;
+}
+
+/**
+ * Mirrors frontend useTodayChallenges.isTodayValidForChallenge using calendar-day keys.
+ */
+function isHabitScheduledOnLocalDate(challenge, localDate) {
   if (!challenge?.startDate || !challenge?.endDate) return false;
 
   const { startKey, endKey } = getMissionDateKeys(challenge);
-
   if (!localDate || !startKey || !endKey) return false;
+  if (localDate < startKey || localDate > endKey) return false;
 
-  return localDate >= startKey && localDate <= endKey;
+  if (challenge.frequency !== 'everyOtherDay') return true;
+
+  const start = new Date(`${startKey}T00:00:00Z`);
+  const target = new Date(`${localDate}T00:00:00Z`);
+  const dayIndex = Math.floor((target - start) / (1000 * 60 * 60 * 24));
+
+  return dayIndex >= 0 && dayIndex % 2 === 0;
+}
+
+function isChallengeActiveOnLocalDate(challenge, localDate) {
+  return isHabitScheduledOnLocalDate(challenge, localDate);
 }
 
 function getMissionProgressForDate(challenges, userId, localDate) {
@@ -39,7 +58,8 @@ function getMissionProgressForDate(challenges, userId, localDate) {
   const userIdStr = String(userId);
 
   for (const challenge of challenges || []) {
-    if (!isChallengeActiveOnLocalDate(challenge, localDate)) continue;
+    if (isHabitFinished(challenge, localDate)) continue;
+    if (!isHabitScheduledOnLocalDate(challenge, localDate)) continue;
 
     const participant = (challenge.participants || []).find((participantEntry) => {
       return participantEntry?.userId && String(participantEntry.userId) === userIdStr;
@@ -72,7 +92,6 @@ function buildDailyProgress({ checklist, challenges, userId, localDate, timeZone
     checklist: checklistProgress,
     mission: missionProgress,
     isEmpty: total === 0,
-    isStarted: completed > 0,
     isComplete: total > 0 && completed >= total
   };
 }
@@ -107,7 +126,7 @@ async function loadHabitChallengesForUser(userId) {
   return Challenge.find({
     challengeType: 'habit',
     'participants.userId': userId
-  }).select('startDate endDate participants');
+  }).select('startDate endDate frequency participants');
 }
 
 async function getUserDailyProgress(user, now, options = {}) {
@@ -134,6 +153,8 @@ async function getUserDailyProgress(user, now, options = {}) {
 module.exports = {
   getMissionDateKeys,
   isDateWithinRange,
+  isHabitFinished,
+  isHabitScheduledOnLocalDate,
   isChallengeActiveOnLocalDate,
   getMissionProgressForDate,
   buildDailyProgress,
