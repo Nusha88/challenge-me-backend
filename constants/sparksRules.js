@@ -3,7 +3,8 @@ const SPARKS_EVENT_TYPES = Object.freeze({
   HABIT_DAY: 'habit_day',
   MANIFEST: 'manifest',
   STREAK_MILESTONE: 'streak_milestone',
-  MISSION_COMPLETION: 'mission_completion'
+  MISSION_COMPLETION: 'mission_completion',
+  MISSION_EXTEND: 'mission_extend'
 });
 
 const SPARKS_AMOUNTS = Object.freeze({
@@ -13,7 +14,8 @@ const SPARKS_AMOUNTS = Object.freeze({
     3: 20,
     7: 50
   }),
-  MISSION_COMPLETION: 75
+  MISSION_COMPLETION: 75,
+  MISSION_EXTEND: 100
 });
 
 const DAILY_SPARKS_CAP = 60;
@@ -23,7 +25,8 @@ const SPARKS_EVENT_KEY_PREFIXES = Object.freeze({
   HABIT_DAY: 'sparks-habit-day',
   MANIFEST: 'sparks-manifest',
   STREAK_MILESTONE: 'sparks-streak',
-  MISSION_COMPLETION: 'sparks-mission-complete'
+  MISSION_COMPLETION: 'sparks-mission-complete',
+  MISSION_EXTEND: 'sparks-mission-extend'
 });
 
 function buildChecklistTaskSparksKey(localDate, taskKey) {
@@ -63,6 +66,10 @@ function buildMissionCompletionSparksKey(challengeId) {
   return `${SPARKS_EVENT_KEY_PREFIXES.MISSION_COMPLETION}:${challengeId}`;
 }
 
+function buildMissionExtendSparksKey(challengeId, clientDay) {
+  return `${SPARKS_EVENT_KEY_PREFIXES.MISSION_EXTEND}:${challengeId}:${clientDay}`;
+}
+
 function getStreakMilestoneSparks(milestone) {
   return SPARKS_AMOUNTS.STREAK_MILESTONE_BY_DAY[milestone] || 0;
 }
@@ -79,5 +86,6 @@ module.exports = {
   buildManifestSparksKey,
   buildStreakMilestoneSparksKey,
   buildMissionCompletionSparksKey,
+  buildMissionExtendSparksKey,
   getStreakMilestoneSparks
 };

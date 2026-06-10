@@ -9,7 +9,11 @@ const {
   isHabitChallengeCompleted,
   collectNewlyCheckedActionIds,
   enrichChallengesWithWatchState,
-  findMainRitualChallenge
+  findMainRitualChallenge,
+  isChallengeFinished,
+  findChallengeParticipant,
+  getInclusiveDaysBetween,
+  resetActionsChecked
 } = require('../utils/challengeHelpers');
 const {
   notifyChallengeCommentRecipient,
@@ -26,9 +30,14 @@ const {
 const {
   awardHabitDaySparks,
   awardMissionCompletionSparks,
-  awardChecklistTaskSparks
+  awardChecklistTaskSparks,
+  spendSparksOnce
 } = require('../utils/sparksService');
-const { buildResultActionChecklistTaskKey } = require('../constants/sparksRules');
+const {
+  buildResultActionChecklistTaskKey,
+  SPARKS_AMOUNTS,
+  buildMissionExtendSparksKey
+} = require('../constants/sparksRules');
 const { buildRewardPayload } = require('../utils/rewardResponse');
 const { buildWatchedFeedActivities } = require('../utils/watchedFeedService');
 
@@ -652,6 +661,98 @@ router.post('/:id/leave', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Error leaving challenge', error: error.message });
+  }
+});
+
+// Extend a finished challenge for sparks
+router.post('/:id/extend', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const authUserId = decodeOptionalAuthUserId(req);
+
+    if (!authUserId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    const challenge = await Challenge.findById(id);
+
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const participant = findChallengeParticipant(challenge, authUserId);
+    if (!participant) {
+      return res.status(403).json({ message: 'You are not a participant of this challenge' });
+    }
+
+    if (!isChallengeFinished(challenge)) {
+      return res.status(400).json({ message: 'Only finished missions can be extended' });
+    }
+
+    const durationDays = getInclusiveDaysBetween(challenge.startDate, challenge.endDate);
+    if (durationDays < 1) {
+      return res.status(400).json({ message: 'Invalid mission duration' });
+    }
+
+    const { startUtc: newStartDate } = getClientDayRange(req, 0);
+    const { startUtc: newEndDate } = getClientDayRange(req, durationDays - 1);
+    const { clientDayStr } = getClientDayRange(req, 0);
+
+    const extendCost = SPARKS_AMOUNTS.MISSION_EXTEND;
+    const spendKey = buildMissionExtendSparksKey(id, clientDayStr);
+    const spendResult = await spendSparksOnce(authUserId, spendKey, extendCost, {
+      challengeId: id,
+      clientDay: clientDayStr
+    });
+
+    if (!spendResult.success) {
+      if (spendResult.reason === 'insufficient_sparks') {
+        return res.status(402).json({ message: 'Insufficient sparks', reason: spendResult.reason });
+      }
+      if (spendResult.reason === 'already_spent') {
+        return res.status(409).json({ message: 'Mission already extended today', reason: spendResult.reason });
+      }
+      return res.status(400).json({ message: 'Unable to spend sparks', reason: spendResult.reason });
+    }
+
+    const ownerId = challenge.owner?._id || challenge.owner;
+    const isCurrentUserOwner = ownerId && ownerId.toString() === authUserId.toString();
+
+    challenge.startDate = newStartDate;
+    challenge.endDate = newEndDate;
+
+    if (isCurrentUserOwner) {
+      challenge.participants.forEach((p) => {
+        p.completedDays = [];
+      });
+    } else {
+      challenge.owner = authUserId;
+      challenge.participants = [{ userId: authUserId, completedDays: [] }];
+    }
+
+    if (challenge.challengeType === 'result') {
+      resetActionsChecked(challenge.actions);
+    }
+
+    await challenge.save();
+
+    const populatedChallenge = await Challenge.findById(id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(spendResult.user)
+    });
+
+    res.json({
+      message: 'Challenge extended successfully',
+      challenge: populatedChallenge,
+      sparksSpent: extendCost,
+      durationDays,
+      ...rewardPayload
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error extending challenge', error: error.message });
   }
 });
 

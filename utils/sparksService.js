@@ -193,6 +193,48 @@ async function awardMissionCompletionSparks(userId, challengeId) {
   );
 }
 
+async function spendSparksOnce(userId, eventKey, amount, meta = {}) {
+  if (!userId || !eventKey || !amount || amount <= 0) {
+    return {
+      success: false,
+      sparksSpent: 0,
+      reason: 'invalid_input'
+    };
+  }
+
+  const updatedUser = await User.findOneAndUpdate(
+    {
+      _id: userId,
+      sparks: { $gte: amount },
+      awardedSparksEventKeys: { $ne: eventKey }
+    },
+    {
+      $inc: { sparks: -amount },
+      $addToSet: { awardedSparksEventKeys: eventKey }
+    },
+    { new: true }
+  );
+
+  if (!updatedUser) {
+    const user = await User.findById(userId).select('sparks awardedSparksEventKeys');
+    if (!user) {
+      return { success: false, sparksSpent: 0, reason: 'user_not_found' };
+    }
+    if ((user.awardedSparksEventKeys || []).includes(eventKey)) {
+      return { success: false, sparksSpent: 0, reason: 'already_spent' };
+    }
+    return { success: false, sparksSpent: 0, reason: 'insufficient_sparks' };
+  }
+
+  return {
+    success: true,
+    sparksSpent: amount,
+    eventKey,
+    user: updatedUser,
+    meta
+  };
+}
+
 module.exports = {
   awardSparksOnce,
   awardCappedSparksOnce,
@@ -201,5 +243,6 @@ module.exports = {
   awardManifestSparks,
   awardStreakMilestoneSparks,
   awardMissionCompletionSparks,
+  spendSparksOnce,
   DAILY_SPARKS_CAP
 };

@@ -185,6 +185,88 @@ function isHabitChallengeCompleted(challenge, participant) {
   return completedDayKeys.size >= totalScheduled;
 }
 
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+function isPastEndDate(endDate) {
+  if (!endDate) return false;
+
+  try {
+    const end = new Date(endDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+    return end < today;
+  } catch {
+    return false;
+  }
+}
+
+function isChallengeFinished(challenge) {
+  if (!challenge) return false;
+
+  if (isPastEndDate(challenge.endDate)) {
+    return true;
+  }
+
+  if (challenge.challengeType === 'result') {
+    return isResultChallengeCompleted(challenge.actions);
+  }
+
+  return false;
+}
+
+function findChallengeParticipant(challenge, userId) {
+  if (!challenge || !userId) return null;
+
+  return (challenge.participants || []).find((participant) => {
+    const participantId = participant.userId?._id || participant.userId;
+    return participantId && participantId.toString() === userId.toString();
+  }) || null;
+}
+
+function isChallengeSuccessful(challenge, userId) {
+  if (!isChallengeFinished(challenge)) {
+    return false;
+  }
+
+  if (challenge.challengeType === 'result') {
+    return isResultChallengeCompleted(challenge.actions);
+  }
+
+  if (challenge.challengeType === 'habit') {
+    const participant = findChallengeParticipant(challenge, userId);
+    if (!participant) return false;
+    return isHabitChallengeCompleted(challenge, participant);
+  }
+
+  return false;
+}
+
+function getInclusiveDaysBetween(startValue, endValue) {
+  const startKey = normalizeDateLikeToYmd(startValue);
+  const endKey = normalizeDateLikeToYmd(endValue);
+  if (!startKey || !endKey) return 0;
+
+  const start = new Date(`${startKey}T00:00:00Z`);
+  const end = new Date(`${endKey}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+
+  return Math.ceil((end - start) / MS_PER_DAY) + 1;
+}
+
+function resetActionsChecked(actions) {
+  if (!Array.isArray(actions)) return;
+
+  for (const action of actions) {
+    action.checked = false;
+    if (Array.isArray(action.children)) {
+      for (const child of action.children) {
+        child.checked = false;
+      }
+    }
+  }
+}
+
 module.exports = {
   countCompletedActionItems,
   isResultChallengeCompleted,
@@ -192,5 +274,10 @@ module.exports = {
   countScheduledMissionDays,
   collectNewlyCheckedActionIds,
   enrichChallengesWithWatchState,
-  findMainRitualChallenge
+  findMainRitualChallenge,
+  isChallengeFinished,
+  isChallengeSuccessful,
+  findChallengeParticipant,
+  getInclusiveDaysBetween,
+  resetActionsChecked
 };
