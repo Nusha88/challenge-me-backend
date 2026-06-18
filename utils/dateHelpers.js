@@ -158,12 +158,26 @@ function serializeChecklistForClientDay(checklist, clientDayStr) {
   };
 }
 
+function getClientLocalHour(reqOrHeaders) {
+  const headers = reqOrHeaders.headers || reqOrHeaders;
+  const rawOffset = headers['x-client-tz-offset'];
+  const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
+
+  if (tzOffsetMin === null) {
+    return new Date().getUTCHours();
+  }
+
+  const localMs = Date.now() - tzOffsetMin * 60 * 1000;
+  return new Date(localMs).getUTCHours();
+}
+
 module.exports = {
   getLocalParts,
   toLocalDateKey,
   normalizeDateLikeToYmd,
   toClientDayKey,
   getClientDayRange,
+  getClientLocalHour,
   findLatestChecklistInRange,
   serializeChecklistForClientDay
 };

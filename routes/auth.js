@@ -8,6 +8,7 @@ const { sendPasswordResetEmail } = require('../utils/emailService');
 
 const {
   getClientDayRange,
+  getClientLocalHour,
   toClientDayKey,
   findLatestChecklistInRange,
   serializeChecklistForClientDay
@@ -27,9 +28,22 @@ const {
 const {
   awardChecklistTaskSparks,
   awardStreakMilestoneSparks,
-  awardManifestSparks
+  awardManifestSparks,
+  spendSparksOnce
 } = require('../utils/sparksService');
-const { buildChecklistTaskAwardKey, buildResultActionChecklistTaskKey } = require('../constants/sparksRules');
+const {
+  buildChecklistTaskAwardKey,
+  buildResultActionChecklistTaskKey,
+  SPARKS_AMOUNTS,
+  buildFreezeDaySparksKey
+} = require('../constants/sparksRules');
+const {
+  findChallengeParticipant,
+  isChallengeFinished,
+  isDayEffectiveCompleted,
+  appendUniqueParticipantDay,
+  isDateScheduledForChallenge
+} = require('../utils/challengeHelpers');
 const { buildRewardPayload } = require('../utils/rewardResponse');
 const { fetchPaginatedUsers } = require('../utils/usersListService');
 
@@ -365,6 +379,98 @@ router.post('/sparks/manifest', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error awarding manifest sparks:', error);
     res.status(500).json({ message: 'Error awarding manifest sparks', error: error.message });
+  }
+});
+
+router.post('/sparks/freeze-day', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const target = req.body?.target === 'yesterday' ? 'yesterday' : 'today';
+    const dayOffset = target === 'yesterday' ? -1 : 0;
+    const { clientDayStr } = getClientDayRange(req, dayOffset);
+    const clientHour = getClientLocalHour(req);
+
+    if (target === 'today') {
+      if (clientHour < 22 || clientHour > 23) {
+        return res.status(400).json({
+          message: 'Freeze today is only available between 22:00 and 23:59',
+          reason: 'freeze_window_closed'
+        });
+      }
+    } else if (clientHour >= 10) {
+      return res.status(400).json({
+        message: 'Save yesterday streak is only available between 00:00 and 09:59',
+        reason: 'save_yesterday_window_closed'
+      });
+    }
+
+    const challenges = await Challenge.find({
+      challengeType: 'habit',
+      'participants.userId': userId
+    });
+
+    const eligible = [];
+
+    for (const challenge of challenges) {
+      if (isChallengeFinished(challenge)) continue;
+
+      const participant = findChallengeParticipant(challenge, userId);
+      if (!participant) continue;
+      if (!isDateScheduledForChallenge(challenge, clientDayStr)) continue;
+      if (isDayEffectiveCompleted(participant, clientDayStr)) continue;
+
+      eligible.push({ challenge, participant });
+    }
+
+    const minEligible = target === 'yesterday' ? 1 : 2;
+
+    if (eligible.length < minEligible) {
+      return res.status(400).json({
+        message: target === 'yesterday'
+          ? 'At least one incomplete ritual from yesterday is required'
+          : 'At least two incomplete rituals are required to freeze the day'
+      });
+    }
+
+    const cost = SPARKS_AMOUNTS.FREEZE_DAY;
+    const spendKey = buildFreezeDaySparksKey(userId, clientDayStr);
+    const spendResult = await spendSparksOnce(userId, spendKey, cost, {
+      clientDay: clientDayStr
+    });
+
+    if (!spendResult.success) {
+      if (spendResult.reason === 'insufficient_sparks') {
+        return res.status(402).json({ message: 'Insufficient sparks', reason: spendResult.reason });
+      }
+      if (spendResult.reason === 'already_spent') {
+        return res.status(409).json({ message: 'Day already frozen', reason: spendResult.reason });
+      }
+      return res.status(400).json({ message: 'Unable to spend sparks', reason: spendResult.reason });
+    }
+
+    for (const { challenge, participant } of eligible) {
+      appendUniqueParticipantDay(participant, 'frozenDays', clientDayStr);
+      await challenge.save();
+    }
+
+    const challengeIds = eligible.map(({ challenge }) => challenge._id);
+    const updatedChallenges = await Challenge.find({ _id: { $in: challengeIds } })
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(spendResult.user)
+    });
+
+    res.json({
+      message: 'Day frozen successfully',
+      sparksSpent: cost,
+      challenges: updatedChallenges,
+      ...rewardPayload
+    });
+  } catch (error) {
+    console.error('Error freezing day:', error);
+    res.status(500).json({ message: 'Error freezing day', error: error.message });
   }
 });
 

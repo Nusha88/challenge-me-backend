@@ -109,6 +109,14 @@ const challengeSchema = new mongoose.Schema(
         completedDays: {
           type: [String],
           default: []
+        },
+        frozenDays: {
+          type: [String],
+          default: []
+        },
+        secondChanceDays: {
+          type: [String],
+          default: []
         }
       }
     ],

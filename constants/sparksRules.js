@@ -4,7 +4,9 @@ const SPARKS_EVENT_TYPES = Object.freeze({
   MANIFEST: 'manifest',
   STREAK_MILESTONE: 'streak_milestone',
   MISSION_COMPLETION: 'mission_completion',
-  MISSION_EXTEND: 'mission_extend'
+  MISSION_EXTEND: 'mission_extend',
+  FREEZE_DAY: 'freeze_day',
+  SECOND_CHANCE: 'second_chance'
 });
 
 const SPARKS_AMOUNTS = Object.freeze({
@@ -15,7 +17,9 @@ const SPARKS_AMOUNTS = Object.freeze({
     7: 50
   }),
   MISSION_COMPLETION: 75,
-  MISSION_EXTEND: 100
+  MISSION_EXTEND: 100,
+  FREEZE_DAY: 50,
+  SECOND_CHANCE: 30
 });
 
 const DAILY_SPARKS_CAP = 60;
@@ -26,7 +30,9 @@ const SPARKS_EVENT_KEY_PREFIXES = Object.freeze({
   MANIFEST: 'sparks-manifest',
   STREAK_MILESTONE: 'sparks-streak',
   MISSION_COMPLETION: 'sparks-mission-complete',
-  MISSION_EXTEND: 'sparks-mission-extend'
+  MISSION_EXTEND: 'sparks-mission-extend',
+  FREEZE_DAY: 'sparks-freeze-day',
+  SECOND_CHANCE: 'sparks-second-chance'
 });
 
 function buildChecklistTaskSparksKey(localDate, taskKey) {
@@ -70,6 +76,14 @@ function buildMissionExtendSparksKey(challengeId, clientDay) {
   return `${SPARKS_EVENT_KEY_PREFIXES.MISSION_EXTEND}:${challengeId}:${clientDay}`;
 }
 
+function buildFreezeDaySparksKey(userId, clientDay) {
+  return `${SPARKS_EVENT_KEY_PREFIXES.FREEZE_DAY}:${userId}:${clientDay}`;
+}
+
+function buildSecondChanceSparksKey(challengeId, userId, clientDay) {
+  return `${SPARKS_EVENT_KEY_PREFIXES.SECOND_CHANCE}:${challengeId}:${userId}:${clientDay}`;
+}
+
 function getStreakMilestoneSparks(milestone) {
   return SPARKS_AMOUNTS.STREAK_MILESTONE_BY_DAY[milestone] || 0;
 }
@@ -87,5 +101,7 @@ module.exports = {
   buildStreakMilestoneSparksKey,
   buildMissionCompletionSparksKey,
   buildMissionExtendSparksKey,
+  buildFreezeDaySparksKey,
+  buildSecondChanceSparksKey,
   getStreakMilestoneSparks
 };

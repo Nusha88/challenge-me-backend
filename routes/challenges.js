@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Challenge = require('../models/Challenge');
 const User = require('../models/User');
-const { getClientDayRange, normalizeDateLikeToYmd } = require('../utils/dateHelpers');
+const { getClientDayRange, getClientLocalHour, normalizeDateLikeToYmd } = require('../utils/dateHelpers');
 const { findByClientDay, upsertChecklist } = require('../utils/dailyChecklistService');
 const {
   isResultChallengeCompleted,
@@ -13,7 +13,10 @@ const {
   isChallengeFinished,
   findChallengeParticipant,
   getInclusiveDaysBetween,
-  resetActionsChecked
+  resetActionsChecked,
+  isDayEffectiveCompleted,
+  appendUniqueParticipantDay,
+  isDateScheduledForChallenge
 } = require('../utils/challengeHelpers');
 const {
   notifyChallengeCommentRecipient,
@@ -36,7 +39,8 @@ const {
 const {
   buildResultActionChecklistTaskKey,
   SPARKS_AMOUNTS,
-  buildMissionExtendSparksKey
+  buildMissionExtendSparksKey,
+  buildSecondChanceSparksKey
 } = require('../constants/sparksRules');
 const { buildRewardPayload } = require('../utils/rewardResponse');
 const { buildWatchedFeedActivities } = require('../utils/watchedFeedService');
@@ -753,6 +757,97 @@ router.post('/:id/extend', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Error extending challenge', error: error.message });
+  }
+});
+
+// Second chance: mark today as protected completion for sparks (habit only)
+router.post('/:id/second-chance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const authUserId = decodeOptionalAuthUserId(req);
+
+    if (!authUserId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    const challenge = await Challenge.findById(id);
+
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (challenge.challengeType !== 'habit') {
+      return res.status(400).json({ message: 'Only habit challenges support second chance' });
+    }
+
+    if (isChallengeFinished(challenge)) {
+      return res.status(400).json({ message: 'Mission is already finished' });
+    }
+
+    const participantIndex = challenge.participants.findIndex(
+      (p) => p.userId && p.userId.toString() === authUserId.toString()
+    );
+
+    if (participantIndex === -1) {
+      return res.status(403).json({ message: 'You are not a participant of this challenge' });
+    }
+
+    const { clientDayStr } = getClientDayRange(req, 0);
+    const clientHour = getClientLocalHour(req);
+
+    if (clientHour < 22 || clientHour > 23) {
+      return res.status(400).json({
+        message: 'Second chance is only available between 22:00 and 23:59',
+        reason: 'second_chance_window_closed'
+      });
+    }
+
+    if (!isDateScheduledForChallenge(challenge, clientDayStr)) {
+      return res.status(400).json({ message: 'Today is not a scheduled day for this mission' });
+    }
+
+    const participant = challenge.participants[participantIndex];
+
+    if (isDayEffectiveCompleted(participant, clientDayStr)) {
+      return res.status(400).json({ message: 'Today is already completed for this mission' });
+    }
+
+    const cost = SPARKS_AMOUNTS.SECOND_CHANCE;
+    const spendKey = buildSecondChanceSparksKey(id, authUserId, clientDayStr);
+    const spendResult = await spendSparksOnce(authUserId, spendKey, cost, {
+      challengeId: id,
+      clientDay: clientDayStr
+    });
+
+    if (!spendResult.success) {
+      if (spendResult.reason === 'insufficient_sparks') {
+        return res.status(402).json({ message: 'Insufficient sparks', reason: spendResult.reason });
+      }
+      if (spendResult.reason === 'already_spent') {
+        return res.status(409).json({ message: 'Second chance already used for this mission today', reason: spendResult.reason });
+      }
+      return res.status(400).json({ message: 'Unable to spend sparks', reason: spendResult.reason });
+    }
+
+    appendUniqueParticipantDay(participant, 'secondChanceDays', clientDayStr);
+    await challenge.save();
+
+    const populatedChallenge = await Challenge.findById(id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(spendResult.user)
+    });
+
+    res.json({
+      message: 'Second chance applied successfully',
+      challenge: populatedChallenge,
+      sparksSpent: cost,
+      ...rewardPayload
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error applying second chance', error: error.message });
   }
 });
 

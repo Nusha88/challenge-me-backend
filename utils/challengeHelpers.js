@@ -166,6 +166,75 @@ function countScheduledMissionDays(startDate, endDate, frequency = 'daily') {
   return count;
 }
 
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+function getParticipantDayKeys(participant, field) {
+  return (participant?.[field] || [])
+    .map((day) => normalizeDateLikeToYmd(day))
+    .filter(Boolean);
+}
+
+function getParticipantEffectiveDays(participant) {
+  if (!participant) return [];
+
+  const keys = new Set([
+    ...getParticipantDayKeys(participant, 'completedDays'),
+    ...getParticipantDayKeys(participant, 'frozenDays'),
+    ...getParticipantDayKeys(participant, 'secondChanceDays')
+  ]);
+
+  return [...keys].sort();
+}
+
+function getDayProtectionSource(participant, dateStr) {
+  if (!participant) return null;
+
+  const key = normalizeDateLikeToYmd(dateStr);
+  if (!key) return null;
+
+  if (getParticipantDayKeys(participant, 'completedDays').includes(key)) {
+    return 'normal';
+  }
+  if (getParticipantDayKeys(participant, 'frozenDays').includes(key)) {
+    return 'frozen';
+  }
+  if (getParticipantDayKeys(participant, 'secondChanceDays').includes(key)) {
+    return 'secondChance';
+  }
+
+  return null;
+}
+
+function isDayEffectiveCompleted(participant, dateStr) {
+  return getDayProtectionSource(participant, dateStr) !== null;
+}
+
+function appendUniqueParticipantDay(participant, field, dateStr) {
+  const key = normalizeDateLikeToYmd(dateStr);
+  if (!key) return;
+
+  const existing = getParticipantDayKeys(participant, field);
+  const merged = [...new Set([...existing, key])].sort();
+  participant[field] = merged;
+}
+
+function isDateScheduledForChallenge(challenge, dateStr) {
+  const startKey = normalizeDateLikeToYmd(challenge?.startDate);
+  const endKey = normalizeDateLikeToYmd(challenge?.endDate);
+  const key = normalizeDateLikeToYmd(dateStr);
+  if (!startKey || !endKey || !key) return false;
+  if (key < startKey || key > endKey) return false;
+
+  if (challenge.frequency !== 'everyOtherDay') {
+    return true;
+  }
+
+  const start = new Date(`${startKey}T00:00:00Z`);
+  const current = new Date(`${key}T00:00:00Z`);
+  const diffDays = Math.floor((current.getTime() - start.getTime()) / MS_PER_DAY);
+  return diffDays % 2 === 0;
+}
+
 function isHabitChallengeCompleted(challenge, participant) {
   if (!challenge || !participant) return false;
 
@@ -176,16 +245,10 @@ function isHabitChallengeCompleted(challenge, participant) {
   );
   if (totalScheduled <= 0) return false;
 
-  const completedDayKeys = new Set(
-    (participant.completedDays || [])
-      .map((day) => normalizeDateLikeToYmd(day))
-      .filter(Boolean)
-  );
+  const completedDayKeys = new Set(getParticipantEffectiveDays(participant));
 
   return completedDayKeys.size >= totalScheduled;
 }
-
-const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 function isPastEndDate(endDate) {
   if (!endDate) return false;
@@ -279,5 +342,11 @@ module.exports = {
   isChallengeSuccessful,
   findChallengeParticipant,
   getInclusiveDaysBetween,
-  resetActionsChecked
+  resetActionsChecked,
+  getParticipantDayKeys,
+  getParticipantEffectiveDays,
+  getDayProtectionSource,
+  isDayEffectiveCompleted,
+  appendUniqueParticipantDay,
+  isDateScheduledForChallenge
 };
