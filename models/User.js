@@ -126,6 +126,19 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: String,
     default: null
   },
+  referralCode: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true,
+    uppercase: true,
+    index: true
+  },
+  referredBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

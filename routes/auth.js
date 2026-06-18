@@ -46,6 +46,13 @@ const {
 } = require('../utils/challengeHelpers');
 const { buildRewardPayload } = require('../utils/rewardResponse');
 const { fetchPaginatedUsers } = require('../utils/usersListService');
+const {
+  generateUniqueReferralCode,
+  resolveReferrerByCode,
+  createPendingReferral,
+  getReferralStatsForUser,
+  getReferralProfileFlags
+} = require('../utils/referralService');
 
 function serializeUserForClient(user) {
   if (!user) return null;
@@ -173,7 +180,7 @@ router.get('/users/:id', async (req, res) => {
 // Register a new user
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, referralCode } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({
         message: 'All fields are required'
@@ -197,15 +204,26 @@ router.post('/register', async (req, res) => {
         return res.status(409).json({ message: 'A user with this email already exists' });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
+    const newReferralCode = await generateUniqueReferralCode();
+
+    let referredBy = null;
+    const referrer = referralCode ? await resolveReferrerByCode(referralCode) : null;
+
     const user = new User({
       name,
       email: normalizedEmail,
       avatarUrl: req.body.avatarUrl || '',
       password: hashedPassword,
       xp: 0,
-      sparks: 0
+      sparks: 0,
+      referralCode: newReferralCode,
+      referredBy: referrer?._id || null
     });
     await user.save();
+
+    if (referrer) {
+      await createPendingReferral(referrer._id, user._id);
+    }
     // Generate JWT
     const token = jwt.sign({ id: user._id, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
     res.status(201).json({
@@ -218,7 +236,8 @@ router.post('/register', async (req, res) => {
         avatarUrl: user.avatarUrl,
         xp: user.xp || 0,
         sparks: user.sparks || 0,
-        createdAt: user.createdAt
+        createdAt: user.createdAt,
+        referredBy: user.referredBy || null
       }
     });
   } catch (error) {
@@ -286,11 +305,15 @@ router.get('/profile', authenticateToken, async (req, res) => {
       xp: 1,
       sparks: 1,
       createdAt: 1,
+      referredBy: 1,
       _id: 1
     });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    const referralFlags = await getReferralProfileFlags(user._id);
+
     res.json({
       user: {
         id: user._id,
@@ -299,11 +322,32 @@ router.get('/profile', authenticateToken, async (req, res) => {
         avatarUrl: user.avatarUrl,
         xp: user.xp || 0,
         sparks: user.sparks || 0,
-        createdAt: user.createdAt
+        createdAt: user.createdAt,
+        referredBy: referralFlags.referredBy,
+        hasFirstMission: referralFlags.hasFirstMission,
+        referralHookPending: referralFlags.referralHookPending,
+        welcomeHookPending: referralFlags.welcomeHookPending,
+        welcomeHookType: referralFlags.welcomeHookType
       }
     });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching profile', error: error.message });
+  }
+});
+
+router.get('/referrals/me', authenticateToken, async (req, res) => {
+  try {
+    const origin = req.headers.origin || req.headers.referer?.split('/').slice(0, 3).join('/');
+    const stats = await getReferralStatsForUser(req.user.id, origin);
+
+    if (!stats) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching referral stats:', error);
+    res.status(500).json({ message: 'Error fetching referral stats', error: error.message });
   }
 });
 

@@ -164,10 +164,41 @@ async function sendDailyRecapNotification(user, localDate) {
   });
 }
 
+async function notifyReferralCompleted({ referrerId, refereeId, refereeName }) {
+  if (!referrerId || !refereeId) return;
+
+  try {
+    const title = 'Referral reward';
+    const body = `Your friend ${refereeName} accepted a challenge! You both received 50 Sparks. Keep it up!`;
+
+    await createNotificationWithPush({
+      userId: referrerId,
+      type: 'referral_completed',
+      notificationFields: {
+        fromUserId: refereeId,
+        title,
+        body
+      },
+      push: {
+        title,
+        body,
+        tag: `referral-${refereeId}`,
+        data: {
+          type: 'referral_completed',
+          fromUserId: refereeId.toString()
+        }
+      }
+    });
+  } catch (notificationError) {
+    console.error('Error creating referral completed notification:', notificationError);
+  }
+}
+
 module.exports = {
   createNotificationWithPush,
   notifyChallengeCommentRecipient,
   notifyChallengeJoin,
   notifyChallengeWatch,
-  sendDailyRecapNotification
+  sendDailyRecapNotification,
+  notifyReferralCompleted
 };

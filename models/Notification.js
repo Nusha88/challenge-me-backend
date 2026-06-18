@@ -10,7 +10,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['mention', 'comment', 'join', 'watch', 'daily_recap'],
+      enum: ['mention', 'comment', 'join', 'watch', 'daily_recap', 'referral_completed'],
       required: true
     },
     title: {
@@ -32,7 +32,7 @@ const notificationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Challenge',
       required: function requiredChallengeId() {
-        return this.type !== 'daily_recap';
+        return this.type !== 'daily_recap' && this.type !== 'referral_completed';
       },
       default: null
     },

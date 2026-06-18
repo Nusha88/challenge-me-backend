@@ -23,6 +23,7 @@ const {
   notifyChallengeJoin,
   notifyChallengeWatch
 } = require('../utils/notificationService');
+const { getWelcomeBonusRewardPayload } = require('../utils/referralService');
 const {
   awardFirstCommentXp,
   awardHabitDayXp,
@@ -281,9 +282,12 @@ router.post('/', async (req, res) => {
     const challenge = new Challenge(challengeData);
     await challenge.save();
 
+    const welcomeBonusPayload = await getWelcomeBonusRewardPayload(owner, serializeUserForClient);
+
     res.status(201).json({
       message: 'Challenge created successfully',
-      challenge
+      challenge,
+      ...welcomeBonusPayload
     });
   } catch (error) {
     res.status(500).json({ message: 'Error creating challenge', error: error.message });
@@ -614,9 +618,12 @@ router.post('/:id/join', async (req, res) => {
     const ownerId = challenge.owner?._id || challenge.owner;
     await notifyChallengeJoin({ ownerId, fromUserId: userId, challenge });
 
+    const welcomeBonusPayload = await getWelcomeBonusRewardPayload(userId, serializeUserForClient);
+
     res.json({
       message: 'Successfully joined the challenge',
-      challenge
+      challenge,
+      ...welcomeBonusPayload
     });
   } catch (error) {
     res.status(500).json({ message: 'Error joining challenge', error: error.message });
