@@ -1772,6 +1772,135 @@ router.delete('/:id/comments/:commentId', async (req, res) => {
   }
 });
 
+// Get the current user's private diary entries (owner only)
+router.get('/:id/diary', async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id)
+      .populate('userDiaryEntries.userId', 'name avatarUrl')
+      .select('userDiaryEntries owner allowComments');
+
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (!ownerId || ownerId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to view this diary' });
+    }
+
+    const entries = (challenge.userDiaryEntries || []).filter((entry) => {
+      const entryUserId = entry.userId?._id || entry.userId;
+      return entryUserId && entryUserId.toString() === userId.toString();
+    });
+
+    res.json({ entries });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching diary entries', error: error.message });
+  }
+});
+
+// Add a private diary entry (owner only), optionally sharing it to the community feed
+router.post('/:id/diary', async (req, res) => {
+  try {
+    const { userId, text, imageUrl, shareToCommunity } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    if ((!text || !text.trim()) && !imageUrl) {
+      return res.status(400).json({ message: 'Diary text or image is required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (!ownerId || ownerId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to write in this diary' });
+    }
+
+    const entryData = {
+      userId,
+      text: (text && text.trim()) ? text.trim() : ' ',
+      imageUrl: imageUrl || null,
+      createdAt: new Date()
+    };
+
+    challenge.userDiaryEntries.push(entryData);
+
+    let sharedCommentId = null;
+    if (shareToCommunity === true && challenge.allowComments) {
+      challenge.comments.push({
+        userId,
+        text: entryData.text,
+        imageUrl: entryData.imageUrl,
+        createdAt: new Date()
+      });
+    }
+
+    await challenge.save();
+
+    await challenge.populate('userDiaryEntries.userId', 'name avatarUrl');
+
+    const newEntry = challenge.userDiaryEntries[challenge.userDiaryEntries.length - 1];
+
+    if (shareToCommunity === true && challenge.allowComments) {
+      const sharedComment = challenge.comments[challenge.comments.length - 1];
+      sharedCommentId = sharedComment?._id || null;
+    }
+
+    res.status(201).json({
+      message: 'Diary entry added successfully',
+      entry: newEntry,
+      sharedCommentId
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error adding diary entry', error: error.message });
+  }
+});
+
+// Delete a private diary entry (owner / author only)
+router.delete('/:id/diary/:entryId', async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const entry = challenge.userDiaryEntries.id(req.params.entryId);
+    if (!entry) {
+      return res.status(404).json({ message: 'Diary entry not found' });
+    }
+
+    const entryUserId = entry.userId?._id || entry.userId;
+    if (!entryUserId || entryUserId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to delete this diary entry' });
+    }
+
+    entry.deleteOne();
+    await challenge.save();
+
+    res.json({ message: 'Diary entry deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting diary entry', error: error.message });
+  }
+});
+
 // Reply to a reply (nested reply)
 router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) => {
   try {
