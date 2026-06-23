@@ -5,6 +5,7 @@ const Challenge = require('../models/Challenge');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { sendPasswordResetEmail } = require('../utils/emailService');
+const registerRateLimiter = require('../middleware/registerRateLimiter');
 
 const {
   getClientDayRange,
@@ -178,7 +179,7 @@ router.get('/users/:id', async (req, res) => {
 });
 
 // Register a new user
-router.post('/register', async (req, res) => {
+router.post('/register', registerRateLimiter, async (req, res) => {
   try {
     const { name, email, password, referralCode } = req.body;
     if (!name || !email || !password) {

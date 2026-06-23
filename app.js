@@ -18,6 +18,7 @@ if (!process.env.ATLAS_URI) {
 
 const app = express();
 
+app.set('trust proxy', 1);
 
 // CORS configuration
 const defaultAllowedOrigins = [
