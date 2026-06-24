@@ -35,6 +35,7 @@ const {
   awardHabitDaySparks,
   awardMissionCompletionSparks,
   awardChecklistTaskSparks,
+  awardQuestActionSparks,
   spendSparksOnce
 } = require('../utils/sparksService');
 const {
@@ -412,6 +413,162 @@ router.patch('/:id/actions', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Error updating actions', error: error.message });
+  }
+});
+
+// Complete a single quest (result) action, optionally with a diary report
+router.post('/:id/actions/:actionId/complete', async (req, res) => {
+  try {
+    const { id, actionId } = req.params;
+    const { mode = 'check', text, imageUrl, shareToCommunity } = req.body;
+
+    const challenge = await Challenge.findById(id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (challenge.challengeType !== 'result') {
+      return res.status(400).json({ message: 'This route is only for result challenges' });
+    }
+
+    const authUserId = decodeOptionalAuthUserId(req);
+    if (!authUserId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (authUserId.toString() !== ownerId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to update this challenge' });
+    }
+
+    const action = challenge.actions.id(actionId);
+    if (!action) {
+      return res.status(404).json({ message: 'Action not found' });
+    }
+
+    const prevActions = JSON.parse(JSON.stringify(challenge.actions || []));
+    const wasCompletedBefore = isResultChallengeCompleted(prevActions);
+
+    action.checked = true;
+    if (Array.isArray(action.children)) {
+      action.children.forEach((child) => { child.checked = true; });
+    }
+
+    await challenge.save();
+
+    const isCompletedNow = isResultChallengeCompleted(challenge.actions);
+    const { clientDayStr: todayStr } = getClientDayRange(req, 0);
+
+    let updatedUser = null;
+    const xpResults = [];
+    const sparksResults = [];
+
+    const xpResult = await awardResultActionXp(authUserId, challenge._id, actionId);
+    xpResults.push(xpResult);
+    if (xpResult.awarded && xpResult.user) {
+      updatedUser = xpResult.user;
+    }
+
+    const sparkAmount = mode === 'report'
+      ? SPARKS_AMOUNTS.QUEST_ACTION_REPORT
+      : SPARKS_AMOUNTS.QUEST_ACTION_CHECK;
+    const sparksResult = await awardQuestActionSparks(
+      authUserId,
+      todayStr,
+      challenge._id,
+      actionId,
+      sparkAmount
+    );
+    sparksResults.push(sparksResult);
+    if (sparksResult.awarded && sparksResult.user) {
+      updatedUser = sparksResult.user;
+    }
+
+    if (!wasCompletedBefore && isCompletedNow) {
+      const completionXpResult = await awardResultCompletionXp(authUserId, challenge);
+      xpResults.push(completionXpResult);
+      if (completionXpResult.awarded && completionXpResult.user) {
+        updatedUser = completionXpResult.user;
+      }
+
+      const missionSparksResult = await awardMissionCompletionSparks(authUserId, challenge._id);
+      sparksResults.push(missionSparksResult);
+      if (missionSparksResult.awarded && missionSparksResult.user) {
+        updatedUser = missionSparksResult.user;
+      }
+    }
+
+    try {
+      const userForChecklist = await User.findById(authUserId).select('dailyChecklists');
+      if (userForChecklist) {
+        await syncTodayChecklistForResultActions(
+          userForChecklist._id,
+          userForChecklist.dailyChecklists,
+          req,
+          challenge,
+          prevActions,
+          challenge.actions
+        );
+      }
+    } catch (syncErr) {
+      console.error('Error syncing result actions to daily checklist:', syncErr);
+    }
+
+    let entry = null;
+    let sharedCommentId = null;
+
+    if (mode === 'report') {
+      const reportText = (text && text.trim()) ? text.trim() : '';
+      const reportImage = imageUrl ? String(imageUrl).trim() : null;
+
+      if (!reportText && !reportImage) {
+        return res.status(400).json({ message: 'Report text or image is required' });
+      }
+
+      challenge.userDiaryEntries.push({
+        userId: authUserId,
+        text: reportText,
+        imageUrl: reportImage,
+        actionTitle: action.text || '',
+        actionId: action._id,
+        createdAt: new Date()
+      });
+
+      if (shareToCommunity === true && challenge.allowComments) {
+        challenge.comments.push({
+          userId: authUserId,
+          text: reportText,
+          imageUrl: reportImage,
+          createdAt: new Date()
+        });
+      }
+
+      await challenge.save();
+      await challenge.populate('userDiaryEntries.userId', 'name avatarUrl');
+
+      entry = challenge.userDiaryEntries[challenge.userDiaryEntries.length - 1];
+
+      if (shareToCommunity === true && challenge.allowComments) {
+        const sharedComment = challenge.comments[challenge.comments.length - 1];
+        sharedCommentId = sharedComment?._id || null;
+      }
+    }
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(await User.findById(authUserId).select('name email avatarUrl xp sparks createdAt _id')),
+      xpResults,
+      sparksResults
+    });
+
+    res.json({
+      message: 'Action completed successfully',
+      challenge,
+      entry,
+      sharedCommentId,
+      ...rewardPayload
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error completing action', error: error.message });
   }
 });
 
@@ -1550,7 +1707,7 @@ router.post('/:id/comments', async (req, res) => {
 
     const comment = {
       userId,
-      text: (text && text.trim()) ? text.trim() : ' ',
+      text: (text && text.trim()) ? text.trim() : '',
       imageUrl: imageUrl || null,
       createdAt: new Date()
     };
@@ -1830,7 +1987,7 @@ router.post('/:id/diary', async (req, res) => {
 
     const entryData = {
       userId,
-      text: (text && text.trim()) ? text.trim() : ' ',
+      text: (text && text.trim()) ? text.trim() : '',
       imageUrl: imageUrl || null,
       createdAt: new Date()
     };

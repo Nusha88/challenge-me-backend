@@ -146,6 +146,17 @@ async function awardChecklistTaskSparks(userId, localDate, taskKey) {
   );
 }
 
+async function awardQuestActionSparks(userId, localDate, challengeId, actionId, amount) {
+  const taskKey = buildResultActionChecklistTaskKey(challengeId, actionId);
+  return awardCappedSparksOnce(
+    userId,
+    buildChecklistTaskSparksKey(localDate, taskKey),
+    amount,
+    localDate,
+    { type: SPARKS_EVENT_TYPES.CHECKLIST_TASK, localDate, taskKey }
+  );
+}
+
 async function awardHabitDaySparks(userId, challengeId, localDate) {
   return awardCappedSparksOnce(
     userId,
@@ -239,6 +250,7 @@ module.exports = {
   awardSparksOnce,
   awardCappedSparksOnce,
   awardChecklistTaskSparks,
+  awardQuestActionSparks,
   awardHabitDaySparks,
   awardManifestSparks,
   awardStreakMilestoneSparks,

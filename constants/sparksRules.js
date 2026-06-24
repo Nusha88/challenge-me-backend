@@ -13,6 +13,8 @@ const SPARKS_EVENT_TYPES = Object.freeze({
 
 const SPARKS_AMOUNTS = Object.freeze({
   TASK_COMPLETION: 2,
+  QUEST_ACTION_CHECK: 1,
+  QUEST_ACTION_REPORT: 3,
   MANIFEST: 10,
   STREAK_MILESTONE_BY_DAY: Object.freeze({
     3: 20,

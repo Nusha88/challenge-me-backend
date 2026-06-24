@@ -133,7 +133,7 @@ const challengeSchema = new mongoose.Schema(
         },
         text: {
           type: String,
-          required: true,
+          default: '',
           trim: true,
           maxlength: 1000
         },
@@ -242,13 +242,20 @@ const challengeSchema = new mongoose.Schema(
         },
         text: {
           type: String,
-          required: true,
+          default: '',
           trim: true,
           maxlength: 1000
         },
         imageUrl: {
           type: String,
           default: null
+        },
+        actionTitle: {
+          type: String,
+          default: ''
+        },
+        actionId: {
+          type: mongoose.Schema.Types.ObjectId
         },
         createdAt: {
           type: Date,
