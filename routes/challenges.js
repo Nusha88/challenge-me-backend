@@ -11,6 +11,8 @@ const {
   enrichChallengesWithWatchState,
   findMainRitualChallenge,
   isChallengeFinished,
+  isMissionActiveOnClientDay,
+  isMissionFinishedForCommentSparks,
   findChallengeParticipant,
   getInclusiveDaysBetween,
   resetActionsChecked,
@@ -58,6 +60,32 @@ function serializeUserForClient(user) {
     sparks: user.sparks || 0,
     createdAt: user.createdAt
   };
+}
+
+async function maybeAwardMissionCommentSparks(req, userId, challenge, ownerId) {
+  let finalUser = userId
+    ? await User.findById(userId).select('name email avatarUrl xp sparks createdAt _id')
+    : null;
+  const sparksResults = [];
+
+  if (!userId) {
+    return { finalUser, sparksResults };
+  }
+
+  const { clientDayStr } = getClientDayRange(req, 0);
+  const isActive = isMissionActiveOnClientDay(challenge, clientDayStr);
+  const isFinished = isMissionFinishedForCommentSparks(challenge, clientDayStr);
+  const isNotOwner = ownerId && userId.toString() !== ownerId.toString();
+
+  if (isActive && !isFinished && isNotOwner) {
+    const sparksResult = await awardMissionCommentSparks(userId, challenge._id, clientDayStr);
+    sparksResults.push(sparksResult);
+    if (sparksResult.awarded && sparksResult.user) {
+      finalUser = sparksResult.user;
+    }
+  }
+
+  return { finalUser, sparksResults };
 }
 
 function decodeOptionalAuthUserId(req) {
@@ -1721,43 +1749,12 @@ router.post('/:id/comments', async (req, res) => {
     const newComment = challenge.comments[challenge.comments.length - 1];
     const ownerId = challenge.owner?._id || challenge.owner;
 
-    let finalUser = userId
-      ? await User.findById(userId).select('name email avatarUrl xp sparks createdAt _id')
-      : null;
-    const sparksResults = [];
-
-    if (userId) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const endDate = new Date(challenge.endDate);
-      endDate.setHours(0, 0, 0, 0);
-      const isActive = endDate >= today;
-
-      let isFinished = false;
-      if (challenge.challengeType === 'result') {
-        if (challenge.actions && Array.isArray(challenge.actions) && challenge.actions.length > 0) {
-          isFinished = challenge.actions.every(action => {
-            if (!action.checked) return false;
-            if (action.children && Array.isArray(action.children) && action.children.length > 0) {
-              return action.children.every(child => child.checked);
-            }
-            return true;
-          });
-        }
-      } else {
-        isFinished = endDate < today;
-      }
-
-      const isNotOwner = ownerId && userId.toString() !== ownerId.toString();
-      if (isActive && !isFinished && isNotOwner) {
-        const { clientDayStr } = getClientDayRange(req, 0);
-        const sparksResult = await awardMissionCommentSparks(userId, challenge._id, clientDayStr);
-        sparksResults.push(sparksResult);
-        if (sparksResult.awarded && sparksResult.user) {
-          finalUser = sparksResult.user;
-        }
-      }
-    }
+    const { finalUser, sparksResults } = await maybeAwardMissionCommentSparks(
+      req,
+      userId,
+      challenge,
+      ownerId
+    );
 
     // Notify challenge owner (same flow as mention notifications)
     if (ownerId) {
@@ -1845,7 +1842,7 @@ router.post('/:id/comments/:commentId/reply', async (req, res) => {
       return res.status(400).json({ message: 'User ID and reply text are required' });
     }
 
-    const challenge = await Challenge.findById(req.params.id);
+    const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
@@ -1875,6 +1872,13 @@ router.post('/:id/comments/:commentId/reply', async (req, res) => {
     await challenge.populate('comments.replies.mentionedUserId', 'name avatarUrl');
 
     const newReply = comment.replies[comment.replies.length - 1];
+    const ownerId = challenge.owner?._id || challenge.owner;
+    const { finalUser, sparksResults } = await maybeAwardMissionCommentSparks(
+      req,
+      userId,
+      challenge,
+      ownerId
+    );
     
     if (mentionedUserId) {
       await notifyChallengeCommentRecipient({
@@ -1887,7 +1891,12 @@ router.post('/:id/comments/:commentId/reply', async (req, res) => {
       });
     }
 
-    res.status(201).json({ message: 'Reply added successfully', reply: newReply });
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(finalUser),
+      sparksResults
+    });
+
+    res.status(201).json({ message: 'Reply added successfully', reply: newReply, ...rewardPayload });
   } catch (error) {
     res.status(500).json({ message: 'Error adding reply', error: error.message });
   }
@@ -2067,7 +2076,7 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) 
       return res.status(400).json({ message: 'User ID and reply text are required' });
     }
 
-    const challenge = await Challenge.findById(req.params.id);
+    const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
@@ -2096,6 +2105,14 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) 
 
     parentReply.replies.push(nestedReply);
     await challenge.save();
+
+    const ownerId = challenge.owner?._id || challenge.owner;
+    const { finalUser, sparksResults } = await maybeAwardMissionCommentSparks(
+      req,
+      userId,
+      challenge,
+      ownerId
+    );
 
     // Re-fetch and populate user info for the new nested reply
     const User = require('../models/User');
@@ -2134,13 +2151,19 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) 
         replyId: newNestedReply._id
       });
     }
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(finalUser),
+      sparksResults
+    });
     
     // Return the properly populated nested reply
     res.status(201).json({ 
       message: 'Nested reply added successfully', 
       reply: newNestedReply,
       parentReply: updatedParentReply,
-      comment: updatedComment
+      comment: updatedComment,
+      ...rewardPayload
     });
   } catch (error) {
     res.status(500).json({ message: 'Error adding nested reply', error: error.message });

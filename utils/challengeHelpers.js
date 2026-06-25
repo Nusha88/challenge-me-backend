@@ -264,6 +264,33 @@ function isPastEndDate(endDate) {
   }
 }
 
+function isMissionActiveOnClientDay(challenge, clientDayStr) {
+  if (!challenge || !clientDayStr) return false;
+
+  const startKey = normalizeDateLikeToYmd(challenge.startDate);
+  const endKey = normalizeDateLikeToYmd(challenge.endDate);
+  if (!startKey || !endKey) return false;
+
+  return startKey <= clientDayStr && endKey >= clientDayStr;
+}
+
+function isMissionFinishedForCommentSparks(challenge, clientDayStr) {
+  if (!challenge) return true;
+
+  const endKey = normalizeDateLikeToYmd(challenge.endDate);
+  if (endKey && clientDayStr && endKey < clientDayStr) {
+    return true;
+  }
+
+  if (challenge.challengeType === 'result') {
+    if (challenge.actions && Array.isArray(challenge.actions) && challenge.actions.length > 0) {
+      return isResultChallengeCompleted(challenge.actions);
+    }
+  }
+
+  return false;
+}
+
 function isChallengeFinished(challenge) {
   if (!challenge) return false;
 
@@ -339,6 +366,8 @@ module.exports = {
   enrichChallengesWithWatchState,
   findMainRitualChallenge,
   isChallengeFinished,
+  isMissionActiveOnClientDay,
+  isMissionFinishedForCommentSparks,
   isChallengeSuccessful,
   findChallengeParticipant,
   getInclusiveDaysBetween,
