@@ -4,7 +4,7 @@ const User = require('../models/User');
 const Challenge = require('../models/Challenge');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { sendPasswordResetEmail } = require('../utils/emailService');
+const { sendPasswordResetEmail, sendPasswordResetSuccessEmail } = require('../utils/emailService');
 const registerRateLimiter = require('../middleware/registerRateLimiter');
 
 const {
@@ -546,7 +546,9 @@ router.post('/forgot-password', async (req, res) => {
     // Send password reset email
     try {
       const origin = req.headers.origin || req.headers.referer || null;
-      await sendPasswordResetEmail(user.email, resetToken, user.name, origin);
+      const language = req.body.language
+        || req.headers['accept-language']?.split(',')[0]?.split('-')[0];
+      await sendPasswordResetEmail(user.email, resetToken, user.name, origin, language);
       console.log(`Password reset email sent to ${user.email}`);
     } catch (emailError) {
       console.error('Failed to send password reset email:', emailError);
@@ -584,6 +586,17 @@ router.post('/reset-password', async (req, res) => {
     user.resetPasswordToken = null;
     user.resetPasswordExpires = null;
     await user.save();
+
+    try {
+      const origin = req.headers.origin || req.headers.referer || null;
+      const language = req.body.language
+        || req.headers['accept-language']?.split(',')[0]?.split('-')[0];
+      await sendPasswordResetSuccessEmail(user.email, user.name, origin, language);
+      console.log(`Password reset success email sent to ${user.email}`);
+    } catch (emailError) {
+      console.error('Failed to send password reset success email:', emailError);
+    }
+
     res.json({ message: 'Password has been reset successfully' });
   } catch (error) {
     console.error('Reset password error:', error);

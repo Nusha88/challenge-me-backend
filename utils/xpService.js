@@ -7,7 +7,6 @@ const {
   buildHabitCompletionXpKey,
   buildResultActionXpKey,
   buildResultCompletionXpKey,
-  buildFirstCommentXpKey,
   buildDailyFullCompletionXpKey,
   buildChecklistTaskXpKey,
   buildStreakMilestoneXpKey,
@@ -107,18 +106,6 @@ async function awardResultCompletionXp(userId, challenge) {
   );
 }
 
-async function awardFirstCommentXp(userId, challengeId) {
-  return awardXpOnce(
-    userId,
-    buildFirstCommentXpKey(challengeId),
-    XP_AMOUNTS.FIRST_COMMENT,
-    {
-      type: XP_EVENT_TYPES.FIRST_COMMENT,
-      challengeId
-    }
-  );
-}
-
 async function awardDailyFullCompletionXp(userId, localDate) {
   return awardXpOnce(
     userId,
@@ -171,7 +158,6 @@ module.exports = {
   awardHabitCompletionXp,
   awardResultActionXp,
   awardResultCompletionXp,
-  awardFirstCommentXp,
   awardDailyFullCompletionXp,
   awardChecklistTaskXp,
   awardStreakMilestoneXp,

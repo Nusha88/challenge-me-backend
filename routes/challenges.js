@@ -25,7 +25,6 @@ const {
 } = require('../utils/notificationService');
 const { getWelcomeBonusRewardPayload } = require('../utils/referralService');
 const {
-  awardFirstCommentXp,
   awardHabitDayXp,
   awardHabitCompletionXp,
   awardResultActionXp,
@@ -34,6 +33,7 @@ const {
 const {
   awardHabitDaySparks,
   awardMissionCompletionSparks,
+  awardMissionCommentSparks,
   awardChecklistTaskSparks,
   awardQuestActionSparks,
   spendSparksOnce
@@ -1719,10 +1719,12 @@ router.post('/:id/comments', async (req, res) => {
     await challenge.populate('comments.userId', 'name avatarUrl');
 
     const newComment = challenge.comments[challenge.comments.length - 1];
-    
-    let xpGained = 0;
-    let xpAward = { awarded: false, gained: 0, reason: null };
-    let finalUser = userId ? await User.findById(userId).select('xp') : null;
+    const ownerId = challenge.owner?._id || challenge.owner;
+
+    let finalUser = userId
+      ? await User.findById(userId).select('name email avatarUrl xp sparks createdAt _id')
+      : null;
+    const sparksResults = [];
 
     if (userId) {
       const today = new Date();
@@ -1746,23 +1748,18 @@ router.post('/:id/comments', async (req, res) => {
         isFinished = endDate < today;
       }
 
-      if (isActive && !isFinished) {
-        const xpResult = await awardFirstCommentXp(userId, challenge._id);
-        xpAward = {
-          awarded: xpResult.awarded,
-          gained: xpResult.xpGained,
-          reason: xpResult.reason || null
-        };
-
-        if (xpResult.awarded) {
-          xpGained = xpResult.xpGained;
-          finalUser = xpResult.user;
+      const isNotOwner = ownerId && userId.toString() !== ownerId.toString();
+      if (isActive && !isFinished && isNotOwner) {
+        const { clientDayStr } = getClientDayRange(req, 0);
+        const sparksResult = await awardMissionCommentSparks(userId, challenge._id, clientDayStr);
+        sparksResults.push(sparksResult);
+        if (sparksResult.awarded && sparksResult.user) {
+          finalUser = sparksResult.user;
         }
       }
     }
-    
+
     // Notify challenge owner (same flow as mention notifications)
-    const ownerId = challenge.owner?._id || challenge.owner;
     if (ownerId) {
       await notifyChallengeCommentRecipient({
         recipientUserId: ownerId,
@@ -1772,13 +1769,16 @@ router.post('/:id/comments', async (req, res) => {
         commentId: newComment._id
       });
     }
-    
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(finalUser),
+      sparksResults
+    });
+
     res.status(201).json({
       message: 'Comment added successfully',
       comment: newComment,
-      xpGained,
-      xp: finalUser?.xp,
-      xpAward
+      ...rewardPayload
     });
   } catch (error) {
     res.status(500).json({ message: 'Error adding comment', error: error.message });

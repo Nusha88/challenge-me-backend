@@ -10,6 +10,7 @@ const {
   buildManifestSparksKey,
   buildStreakMilestoneSparksKey,
   buildMissionCompletionSparksKey,
+  buildMissionCommentSparksKey,
   getStreakMilestoneSparks
 } = require('../constants/sparksRules');
 
@@ -204,6 +205,16 @@ async function awardMissionCompletionSparks(userId, challengeId) {
   );
 }
 
+async function awardMissionCommentSparks(userId, challengeId, localDate) {
+  return awardCappedSparksOnce(
+    userId,
+    buildMissionCommentSparksKey(challengeId),
+    SPARKS_AMOUNTS.MISSION_COMMENT,
+    localDate,
+    { type: SPARKS_EVENT_TYPES.MISSION_COMMENT, challengeId, localDate }
+  );
+}
+
 async function spendSparksOnce(userId, eventKey, amount, meta = {}) {
   if (!userId || !eventKey || !amount || amount <= 0) {
     return {
@@ -255,6 +266,7 @@ module.exports = {
   awardManifestSparks,
   awardStreakMilestoneSparks,
   awardMissionCompletionSparks,
+  awardMissionCommentSparks,
   spendSparksOnce,
   DAILY_SPARKS_CAP
 };

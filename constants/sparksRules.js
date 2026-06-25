@@ -8,7 +8,8 @@ const SPARKS_EVENT_TYPES = Object.freeze({
   FREEZE_DAY: 'freeze_day',
   SECOND_CHANCE: 'second_chance',
   REFERRAL: 'referral',
-  SIGNUP_BONUS: 'signup_bonus'
+  SIGNUP_BONUS: 'signup_bonus',
+  MISSION_COMMENT: 'mission_comment'
 });
 
 const SPARKS_AMOUNTS = Object.freeze({
@@ -25,7 +26,8 @@ const SPARKS_AMOUNTS = Object.freeze({
   FREEZE_DAY: 50,
   SECOND_CHANCE: 30,
   REFERRAL: 50,
-  SIGNUP_BONUS: 100
+  SIGNUP_BONUS: 100,
+  MISSION_COMMENT: 5
 });
 
 const DAILY_SPARKS_CAP = 60;
@@ -40,7 +42,8 @@ const SPARKS_EVENT_KEY_PREFIXES = Object.freeze({
   FREEZE_DAY: 'sparks-freeze-day',
   SECOND_CHANCE: 'sparks-second-chance',
   REFERRAL: 'sparks-referral',
-  SIGNUP_BONUS: 'sparks-signup-bonus'
+  SIGNUP_BONUS: 'sparks-signup-bonus',
+  MISSION_COMMENT: 'sparks-mission-comment'
 });
 
 function buildChecklistTaskSparksKey(localDate, taskKey) {
@@ -100,6 +103,10 @@ function buildSignupBonusSparksKey(userId) {
   return `${SPARKS_EVENT_KEY_PREFIXES.SIGNUP_BONUS}:${userId}`;
 }
 
+function buildMissionCommentSparksKey(challengeId) {
+  return `${SPARKS_EVENT_KEY_PREFIXES.MISSION_COMMENT}:${challengeId}`;
+}
+
 function getStreakMilestoneSparks(milestone) {
   return SPARKS_AMOUNTS.STREAK_MILESTONE_BY_DAY[milestone] || 0;
 }
@@ -121,5 +128,6 @@ module.exports = {
   buildSecondChanceSparksKey,
   buildReferralSparksKey,
   buildSignupBonusSparksKey,
+  buildMissionCommentSparksKey,
   getStreakMilestoneSparks
 };
