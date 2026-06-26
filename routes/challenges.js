@@ -48,6 +48,7 @@ const {
 } = require('../constants/sparksRules');
 const { buildRewardPayload } = require('../utils/rewardResponse');
 const { buildWatchedFeedActivities } = require('../utils/watchedFeedService');
+const { clearReactivationStreakFlag } = require('../utils/reactivationService');
 
 function serializeUserForClient(user) {
   if (!user) return null;
@@ -1345,6 +1346,10 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
 
     challenge.participants[participantIndex].completedDays = completedDays;
     await challenge.save();
+
+    if (addedDays.length > 0) {
+      await clearReactivationStreakFlag(userId);
+    }
 
     const userSelect = 'name email avatarUrl createdAt _id xp sparks';
     let updatedUser = await User.findById(userId).select(userSelect);

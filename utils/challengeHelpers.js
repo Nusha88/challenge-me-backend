@@ -17,6 +17,19 @@ function countCompletedActionItems(actions) {
   return count;
 }
 
+function countTotalActionItems(actions) {
+  if (!actions || !Array.isArray(actions)) return 0;
+  let count = 0;
+  actions.forEach((action) => {
+    if (Array.isArray(action.children) && action.children.length > 0) {
+      count += action.children.length;
+    } else {
+      count += 1;
+    }
+  });
+  return count;
+}
+
 /**
  * Проверяет, завершен ли result челлендж (все actions и children выполнены).
  * @param {Array} actions - Массив действий челленджа
@@ -359,6 +372,7 @@ function resetActionsChecked(actions) {
 
 module.exports = {
   countCompletedActionItems,
+  countTotalActionItems,
   isResultChallengeCompleted,
   isHabitChallengeCompleted,
   countScheduledMissionDays,

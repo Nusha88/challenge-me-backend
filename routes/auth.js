@@ -4,7 +4,14 @@ const User = require('../models/User');
 const Challenge = require('../models/Challenge');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { sendPasswordResetEmail, sendPasswordResetSuccessEmail } = require('../utils/emailService');
+const {
+  sendPasswordResetEmail,
+  sendPasswordResetSuccessEmail,
+  sendNewUserRegistrationNotifyEmail,
+  sendWeeklyChronicleEmail,
+  sendReactivationEmail
+} = require('../utils/emailService');
+const { buildWeeklyChronicleReport, resolveUserReportLanguage } = require('../utils/weeklyChronicleReport');
 const registerRateLimiter = require('../middleware/registerRateLimiter');
 
 const {
@@ -225,6 +232,17 @@ router.post('/register', registerRateLimiter, async (req, res) => {
     if (referrer) {
       await createPendingReferral(referrer._id, user._id);
     }
+
+    try {
+      await sendNewUserRegistrationNotifyEmail({
+        userName: user.name,
+        userEmail: user.email,
+        registeredAt: user.createdAt
+      });
+    } catch (emailError) {
+      console.error('Failed to send registration notify email:', emailError);
+    }
+
     // Generate JWT
     const token = jwt.sign({ id: user._id, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
     res.status(201).json({
@@ -659,6 +677,162 @@ router.put('/profile', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Profile update error:', error);
     res.status(500).json({ message: 'Error updating profile', error: error.message });
+  }
+});
+
+router.get('/weekly-chronicle-settings', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id, 'weeklyChronicleEmailEnabled preferredLanguage dailyRecapLanguage');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      weeklyChronicleEmailEnabled: !!user.weeklyChronicleEmailEnabled,
+      preferredLanguage: user.preferredLanguage || user.dailyRecapLanguage || 'en'
+    });
+  } catch (error) {
+    console.error('Error getting weekly chronicle settings:', error);
+    res.status(500).json({ message: 'Error getting weekly chronicle settings', error: error.message });
+  }
+});
+
+router.put('/weekly-chronicle-settings', authenticateToken, async (req, res) => {
+  try {
+    const { weeklyChronicleEmailEnabled, preferredLanguage, language } = req.body || {};
+    const languageUpdate = preferredLanguage ?? language;
+
+    if (weeklyChronicleEmailEnabled !== undefined && typeof weeklyChronicleEmailEnabled !== 'boolean') {
+      return res.status(400).json({ message: 'weeklyChronicleEmailEnabled must be a boolean' });
+    }
+
+    if (languageUpdate !== undefined && languageUpdate !== 'ru' && languageUpdate !== 'en') {
+      return res.status(400).json({ message: 'language must be "ru" or "en"' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (weeklyChronicleEmailEnabled !== undefined) {
+      user.weeklyChronicleEmailEnabled = weeklyChronicleEmailEnabled;
+    }
+
+    if (languageUpdate !== undefined) {
+      user.preferredLanguage = languageUpdate;
+    }
+
+    await user.save();
+
+    res.json({
+      message: 'Weekly chronicle settings updated',
+      weeklyChronicleEmailEnabled: !!user.weeklyChronicleEmailEnabled,
+      preferredLanguage: user.preferredLanguage || 'en'
+    });
+  } catch (error) {
+    console.error('Error updating weekly chronicle settings:', error);
+    res.status(500).json({ message: 'Error updating weekly chronicle settings', error: error.message });
+  }
+});
+
+router.put('/preferred-language', authenticateToken, async (req, res) => {
+  try {
+    const { language, preferredLanguage } = req.body || {};
+    const nextLanguage = preferredLanguage ?? language;
+
+    if (nextLanguage !== 'ru' && nextLanguage !== 'en') {
+      return res.status(400).json({ message: 'language must be "ru" or "en"' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.preferredLanguage = nextLanguage;
+    await user.save();
+
+    res.json({
+      message: 'Preferred language updated',
+      preferredLanguage: user.preferredLanguage
+    });
+  } catch (error) {
+    console.error('Error updating preferred language:', error);
+    res.status(500).json({ message: 'Error updating preferred language', error: error.message });
+  }
+});
+
+router.post('/weekly-chronicle-settings/send-test', authenticateToken, async (req, res) => {
+  try {
+    const { language, preferredLanguage } = req.body || {};
+    const requestLanguage = preferredLanguage ?? language;
+
+    const user = await User.findById(req.user.id).select(
+      'email name xp sparks awardedSparksEventKeys dailyRecapTimezone dailyRecapLanguage preferredLanguage'
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.email) {
+      return res.status(400).json({ message: 'User email is not set' });
+    }
+
+    const report = await buildWeeklyChronicleReport(user, new Date(), {
+      language: requestLanguage
+    });
+    await sendWeeklyChronicleEmail(user.email, report);
+
+    res.json({
+      message: 'Weekly chronicle test email sent',
+      email: user.email,
+      language: report.language,
+      weekStart: report.weekStart,
+      weekEnd: report.weekEnd
+    });
+  } catch (error) {
+    console.error('Error sending weekly chronicle test email:', error);
+    res.status(500).json({ message: 'Error sending weekly chronicle test email', error: error.message });
+  }
+});
+
+router.post('/reactivation-email/send-test', authenticateToken, async (req, res) => {
+  try {
+    const { language, preferredLanguage } = req.body || {};
+    const requestLanguage = preferredLanguage ?? language;
+
+    const user = await User.findById(req.user.id).select(
+      'email name sparks preferredLanguage dailyRecapLanguage'
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.email) {
+      return res.status(400).json({ message: 'User email is not set' });
+    }
+
+    const resolvedLanguage = resolveUserReportLanguage(user, requestLanguage);
+    const sparksBalance = Math.max(0, Number(user.sparks) || 0);
+
+    await sendReactivationEmail(user.email, {
+      userName: user.name,
+      sparksBalance,
+      language: resolvedLanguage
+    });
+
+    res.json({
+      message: 'Reactivation test email sent',
+      email: user.email,
+      language: resolvedLanguage
+    });
+  } catch (error) {
+    console.error('Error sending reactivation test email:', error);
+    res.status(500).json({ message: 'Error sending reactivation test email', error: error.message });
   }
 });
 

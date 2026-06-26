@@ -122,7 +122,32 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     enum: ['ru', 'en'],
     default: 'en'
   },
+  preferredLanguage: {
+    type: String,
+    enum: ['ru', 'en'],
+    default: 'en'
+  },
   dailyRecapLastSentLocalDate: {
+    type: String,
+    default: null
+  },
+  weeklyChronicleEmailEnabled: {
+    type: Boolean,
+    default: true
+  },
+  weeklyChronicleLastSentWeekKey: {
+    type: String,
+    default: null
+  },
+  reactivationEmailSentStreakKey: {
+    type: String,
+    default: null
+  },
+  reactivationEmailSentAt: {
+    type: Date,
+    default: null
+  },
+  reactivationEmailLastCheckedLocalDate: {
     type: String,
     default: null
   },

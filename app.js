@@ -9,6 +9,8 @@ const challengeRoutes = require('./routes/challenges');
 const notificationsRoutes = require('./routes/notifications');
 const pushRoutes = require('./routes/push');
 const { startDailyRecapScheduler } = require('./utils/dailyRecapScheduler');
+const { startWeeklyChronicleScheduler } = require('./utils/weeklyChronicleScheduler');
+const { startReactivationScheduler } = require('./utils/reactivationScheduler');
 
 // Check for required environment variables
 if (!process.env.ATLAS_URI) {
@@ -69,6 +71,8 @@ mongoose.connect(process.env.ATLAS_URI, {
   // Legacy cleanup: name is no longer unique, so drop old unique index if it exists.
   mongoose.connection.collection('users').dropIndex('name_1').catch(() => {});
   startDailyRecapScheduler();
+  startWeeklyChronicleScheduler();
+  startReactivationScheduler();
 })
 .catch(err => {
   console.error('MongoDB connection error:', err);
