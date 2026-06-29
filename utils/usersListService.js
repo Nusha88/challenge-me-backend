@@ -19,14 +19,9 @@ function buildUsersListPipeline({ searchQuery, skip, limit }) {
           {
             $match: {
               $expr: {
-                $and: [
-                  { $ne: ['$privacy', 'private'] },
-                  {
-                    $or: [
-                      { $eq: ['$owner', '$$userId'] },
-                      { $in: ['$$userId', { $ifNull: ['$participants.userId', []] }] }
-                    ]
-                  }
+                $or: [
+                  { $eq: ['$owner', '$$userId'] },
+                  { $in: ['$$userId', { $ifNull: ['$participants.userId', []] }] }
                 ]
               }
             }

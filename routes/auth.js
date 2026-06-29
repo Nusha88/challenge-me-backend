@@ -50,7 +50,8 @@ const {
   isChallengeFinished,
   isDayEffectiveCompleted,
   appendUniqueParticipantDay,
-  isDateScheduledForChallenge
+  isDateScheduledForChallenge,
+  countUserChallenges
 } = require('../utils/challengeHelpers');
 const { buildRewardPayload } = require('../utils/rewardResponse');
 const { fetchPaginatedUsers } = require('../utils/usersListService');
@@ -154,14 +155,7 @@ router.get('/users/:id', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
     
-    // Get challenge count for the user (excluding private challenges)
-    const challengeCount = await Challenge.countDocuments({
-      $or: [
-        { owner: user._id },
-        { 'participants.userId': user._id }
-      ],
-      privacy: { $ne: 'private' }
-    });
+    const challengeCount = await countUserChallenges(user._id, { includePrivate: true });
     
     const rawOffset = req.headers['x-client-tz-offset'];
     const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
@@ -331,7 +325,10 @@ router.get('/profile', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const referralFlags = await getReferralProfileFlags(user._id);
+    const [referralFlags, challengeCount] = await Promise.all([
+      getReferralProfileFlags(user._id),
+      countUserChallenges(user._id, { includePrivate: true })
+    ]);
 
     res.json({
       user: {
@@ -342,6 +339,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
         xp: user.xp || 0,
         sparks: user.sparks || 0,
         createdAt: user.createdAt,
+        challengeCount,
         referredBy: referralFlags.referredBy,
         hasFirstMission: referralFlags.hasFirstMission,
         referralHookPending: referralFlags.referralHookPending,

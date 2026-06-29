@@ -1,3 +1,5 @@
+const Challenge = require('../models/Challenge');
+
 /**
  * Считает количество выполненных пунктов (actions и children).
  * @param {Array} actions - Массив действий челленджа
@@ -370,6 +372,16 @@ function resetActionsChecked(actions) {
   }
 }
 
+async function countUserChallenges(userId, { includePrivate = true } = {}) {
+  const query = {
+    $or: [{ owner: userId }, { 'participants.userId': userId }]
+  };
+  if (!includePrivate) {
+    query.privacy = { $ne: 'private' };
+  }
+  return Challenge.countDocuments(query);
+}
+
 module.exports = {
   countCompletedActionItems,
   countTotalActionItems,
@@ -391,5 +403,6 @@ module.exports = {
   getDayProtectionSource,
   isDayEffectiveCompleted,
   appendUniqueParticipantDay,
-  isDateScheduledForChallenge
+  isDateScheduledForChallenge,
+  countUserChallenges
 };
