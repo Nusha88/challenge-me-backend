@@ -312,7 +312,7 @@ function isChallengeFinished(challenge) {
   }
 
   if (challenge.challengeType === 'result') {
-    return isResultChallengeCompleted(challenge.actions);
+    return Boolean(challenge.resultMissionEndedAt);
   }
 
   return false;

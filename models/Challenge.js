@@ -83,6 +83,10 @@ const challengeSchema = new mongoose.Schema(
       type: Date,
       required: true
     },
+    resultMissionEndedAt: {
+      type: Date,
+      default: null
+    },
     difficulty: {
       type: String,
       enum: ['easy', 'medium', 'heroic'],
@@ -140,6 +144,10 @@ const challengeSchema = new mongoose.Schema(
         imageUrl: {
           type: String,
           default: null
+        },
+        isTriumph: {
+          type: Boolean,
+          default: false
         },
         reactions: {
           type: Map,
@@ -256,6 +264,10 @@ const challengeSchema = new mongoose.Schema(
         },
         actionId: {
           type: mongoose.Schema.Types.ObjectId
+        },
+        isTriumph: {
+          type: Boolean,
+          default: false
         },
         createdAt: {
           type: Date,

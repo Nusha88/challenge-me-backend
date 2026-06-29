@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Challenge = require('../models/Challenge');
 const User = require('../models/User');
 const { getClientDayRange, getClientLocalHour, normalizeDateLikeToYmd } = require('../utils/dateHelpers');
@@ -47,6 +48,7 @@ const {
   buildSecondChanceSparksKey
 } = require('../constants/sparksRules');
 const { buildRewardPayload } = require('../utils/rewardResponse');
+const { buildMissionRewardSummary } = require('../utils/missionRewardSummary');
 const { buildWatchedFeedActivities } = require('../utils/watchedFeedService');
 const { clearReactivationStreakFlag } = require('../utils/reactivationService');
 
@@ -451,6 +453,18 @@ router.post('/:id/actions/:actionId/complete', async (req, res) => {
     const { id, actionId } = req.params;
     const { mode = 'check', text, imageUrl, shareToCommunity } = req.body;
 
+    const reportText = (text && String(text).trim()) ? String(text).trim() : '';
+    const reportImageRaw = imageUrl ? String(imageUrl).trim() : '';
+    const reportImage = reportImageRaw || null;
+
+    if (mode === 'report' && !reportText && !reportImage) {
+      return res.status(400).json({ message: 'Report text or image is required' });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(actionId)) {
+      return res.status(400).json({ message: 'Invalid challenge or action id' });
+    }
+
     const challenge = await Challenge.findById(id);
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
@@ -475,85 +489,21 @@ router.post('/:id/actions/:actionId/complete', async (req, res) => {
       return res.status(404).json({ message: 'Action not found' });
     }
 
+    const wasAlreadyChecked = !!action.checked;
     const prevActions = JSON.parse(JSON.stringify(challenge.actions || []));
     const wasCompletedBefore = isResultChallengeCompleted(prevActions);
 
-    action.checked = true;
-    if (Array.isArray(action.children)) {
-      action.children.forEach((child) => { child.checked = true; });
-    }
-
-    await challenge.save();
-
-    const isCompletedNow = isResultChallengeCompleted(challenge.actions);
-    const { clientDayStr: todayStr } = getClientDayRange(req, 0);
-
-    let updatedUser = null;
-    const xpResults = [];
-    const sparksResults = [];
-
-    const xpResult = await awardResultActionXp(authUserId, challenge._id, actionId);
-    xpResults.push(xpResult);
-    if (xpResult.awarded && xpResult.user) {
-      updatedUser = xpResult.user;
-    }
-
-    const sparkAmount = mode === 'report'
-      ? SPARKS_AMOUNTS.QUEST_ACTION_REPORT
-      : SPARKS_AMOUNTS.QUEST_ACTION_CHECK;
-    const sparksResult = await awardQuestActionSparks(
-      authUserId,
-      todayStr,
-      challenge._id,
-      actionId,
-      sparkAmount
-    );
-    sparksResults.push(sparksResult);
-    if (sparksResult.awarded && sparksResult.user) {
-      updatedUser = sparksResult.user;
-    }
-
-    if (!wasCompletedBefore && isCompletedNow) {
-      const completionXpResult = await awardResultCompletionXp(authUserId, challenge);
-      xpResults.push(completionXpResult);
-      if (completionXpResult.awarded && completionXpResult.user) {
-        updatedUser = completionXpResult.user;
+    if (!wasAlreadyChecked) {
+      action.checked = true;
+      if (Array.isArray(action.children)) {
+        action.children.forEach((child) => { child.checked = true; });
       }
-
-      const missionSparksResult = await awardMissionCompletionSparks(authUserId, challenge._id);
-      sparksResults.push(missionSparksResult);
-      if (missionSparksResult.awarded && missionSparksResult.user) {
-        updatedUser = missionSparksResult.user;
-      }
-    }
-
-    try {
-      const userForChecklist = await User.findById(authUserId).select('dailyChecklists');
-      if (userForChecklist) {
-        await syncTodayChecklistForResultActions(
-          userForChecklist._id,
-          userForChecklist.dailyChecklists,
-          req,
-          challenge,
-          prevActions,
-          challenge.actions
-        );
-      }
-    } catch (syncErr) {
-      console.error('Error syncing result actions to daily checklist:', syncErr);
     }
 
     let entry = null;
     let sharedCommentId = null;
 
     if (mode === 'report') {
-      const reportText = (text && text.trim()) ? text.trim() : '';
-      const reportImage = imageUrl ? String(imageUrl).trim() : null;
-
-      if (!reportText && !reportImage) {
-        return res.status(400).json({ message: 'Report text or image is required' });
-      }
-
       challenge.userDiaryEntries.push({
         userId: authUserId,
         text: reportText,
@@ -571,10 +521,72 @@ router.post('/:id/actions/:actionId/complete', async (req, res) => {
           createdAt: new Date()
         });
       }
+    }
 
-      await challenge.save();
+    await challenge.save();
+
+    const isCompletedNow = isResultChallengeCompleted(challenge.actions);
+    const { clientDayStr: todayStr } = getClientDayRange(req, 0);
+
+    let updatedUser = null;
+    const xpResults = [];
+    const sparksResults = [];
+
+    if (!wasAlreadyChecked) {
+      const xpResult = await awardResultActionXp(authUserId, challenge._id, actionId);
+      xpResults.push(xpResult);
+      if (xpResult.awarded && xpResult.user) {
+        updatedUser = xpResult.user;
+      }
+
+      const sparkAmount = mode === 'report'
+        ? SPARKS_AMOUNTS.QUEST_ACTION_REPORT
+        : SPARKS_AMOUNTS.QUEST_ACTION_CHECK;
+      const sparksResult = await awardQuestActionSparks(
+        authUserId,
+        todayStr,
+        challenge._id,
+        actionId,
+        sparkAmount
+      );
+      sparksResults.push(sparksResult);
+      if (sparksResult.awarded && sparksResult.user) {
+        updatedUser = sparksResult.user;
+      }
+
+      if (!wasCompletedBefore && isCompletedNow) {
+        const completionXpResult = await awardResultCompletionXp(authUserId, challenge);
+        xpResults.push(completionXpResult);
+        if (completionXpResult.awarded && completionXpResult.user) {
+          updatedUser = completionXpResult.user;
+        }
+
+        const missionSparksResult = await awardMissionCompletionSparks(authUserId, challenge._id);
+        sparksResults.push(missionSparksResult);
+        if (missionSparksResult.awarded && missionSparksResult.user) {
+          updatedUser = missionSparksResult.user;
+        }
+      }
+
+      try {
+        const userForChecklist = await User.findById(authUserId).select('dailyChecklists');
+        if (userForChecklist) {
+          await syncTodayChecklistForResultActions(
+            userForChecklist._id,
+            userForChecklist.dailyChecklists,
+            req,
+            challenge,
+            prevActions,
+            challenge.actions
+          );
+        }
+      } catch (syncErr) {
+        console.error('Error syncing result actions to daily checklist:', syncErr);
+      }
+    }
+
+    if (mode === 'report') {
       await challenge.populate('userDiaryEntries.userId', 'name avatarUrl');
-
       entry = challenge.userDiaryEntries[challenge.userDiaryEntries.length - 1];
 
       if (shareToCommunity === true && challenge.allowComments) {
@@ -590,14 +602,65 @@ router.post('/:id/actions/:actionId/complete', async (req, res) => {
     });
 
     res.json({
-      message: 'Action completed successfully',
+      message: wasAlreadyChecked ? 'Action was already completed' : 'Action completed successfully',
       challenge,
       entry,
       sharedCommentId,
+      alreadyCompleted: wasAlreadyChecked,
       ...rewardPayload
     });
   } catch (error) {
+    console.error('Error completing action:', error);
     res.status(500).json({ message: 'Error completing action', error: error.message });
+  }
+});
+
+router.post('/:id/end-result-mission', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid challenge id' });
+    }
+
+    const challenge = await Challenge.findById(id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (challenge.challengeType !== 'result') {
+      return res.status(400).json({ message: 'This route is only for result challenges' });
+    }
+
+    const authUserId = decodeOptionalAuthUserId(req);
+    if (!authUserId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (authUserId.toString() !== ownerId.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to update this challenge' });
+    }
+
+    if (challenge.resultMissionEndedAt) {
+      return res.status(400).json({ message: 'Mission is already ended' });
+    }
+
+    if (!isResultChallengeCompleted(challenge.actions)) {
+      return res.status(400).json({ message: 'Complete all quest steps before ending the mission' });
+    }
+
+    challenge.resultMissionEndedAt = new Date();
+    await challenge.save();
+
+    res.json({
+      message: 'Mission ended successfully',
+      challenge,
+      missionRewardsSummary: buildMissionRewardSummary(challenge)
+    });
+  } catch (error) {
+    console.error('Error ending result mission:', error);
+    res.status(500).json({ message: 'Error ending mission', error: error.message });
   }
 });
 
@@ -1979,7 +2042,8 @@ router.get('/:id/diary', async (req, res) => {
 // Add a private diary entry (owner only), optionally sharing it to the community feed
 router.post('/:id/diary', async (req, res) => {
   try {
-    const { userId, text, imageUrl, shareToCommunity } = req.body;
+    const { userId, text, imageUrl, shareToCommunity, isTriumph, actionTitle } = req.body;
+    const triumphEntry = isTriumph === true;
 
     if (!userId) {
       return res.status(400).json({ message: 'User ID is required' });
@@ -2003,17 +2067,23 @@ router.post('/:id/diary', async (req, res) => {
       userId,
       text: (text && text.trim()) ? text.trim() : '',
       imageUrl: imageUrl || null,
+      isTriumph: triumphEntry,
+      actionTitle: (actionTitle && String(actionTitle).trim()) ? String(actionTitle).trim() : '',
       createdAt: new Date()
     };
 
     challenge.userDiaryEntries.push(entryData);
 
     let sharedCommentId = null;
-    if (shareToCommunity === true && challenge.allowComments) {
+    const shouldShareToCommunity =
+      challenge.allowComments && (shareToCommunity === true || triumphEntry);
+
+    if (shouldShareToCommunity) {
       challenge.comments.push({
         userId,
         text: entryData.text,
         imageUrl: entryData.imageUrl,
+        isTriumph: triumphEntry,
         createdAt: new Date()
       });
     }
@@ -2024,7 +2094,7 @@ router.post('/:id/diary', async (req, res) => {
 
     const newEntry = challenge.userDiaryEntries[challenge.userDiaryEntries.length - 1];
 
-    if (shareToCommunity === true && challenge.allowComments) {
+    if (shouldShareToCommunity) {
       const sharedComment = challenge.comments[challenge.comments.length - 1];
       sharedCommentId = sharedComment?._id || null;
     }
