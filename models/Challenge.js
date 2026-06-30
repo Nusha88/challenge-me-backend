@@ -121,6 +121,19 @@ const challengeSchema = new mongoose.Schema(
         secondChanceDays: {
           type: [String],
           default: []
+        },
+        joinedAt: {
+          type: Date,
+          default: null
+        },
+        habitMissionEndedAt: {
+          type: Date,
+          default: null
+        },
+        completionTier: {
+          type: String,
+          enum: ['perfect', 'bright', 'sustained', 'extinguished', null],
+          default: null
         }
       }
     ],

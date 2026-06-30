@@ -30,12 +30,14 @@ const { getWelcomeBonusRewardPayload } = require('../utils/referralService');
 const {
   awardHabitDayXp,
   awardHabitCompletionXp,
+  awardTieredHabitCompletionXp,
   awardResultActionXp,
   awardResultCompletionXp
 } = require('../utils/xpService');
 const {
   awardHabitDaySparks,
   awardMissionCompletionSparks,
+  awardTieredMissionCompletionSparks,
   awardMissionCommentSparks,
   awardChecklistTaskSparks,
   awardQuestActionSparks,
@@ -49,6 +51,13 @@ const {
 } = require('../constants/sparksRules');
 const { buildRewardPayload } = require('../utils/rewardResponse');
 const { buildMissionRewardSummary } = require('../utils/missionRewardSummary');
+const {
+  buildHabitMissionRewardSummary,
+  getParticipantJoinedAtKey,
+  getSoloContinuationDates,
+  isMissionFinalDay,
+  needsSoloContinuation
+} = require('../utils/missionTierService');
 const { buildWatchedFeedActivities } = require('../utils/watchedFeedService');
 const { clearReactivationStreakFlag } = require('../utils/reactivationService');
 
@@ -282,7 +291,7 @@ router.post('/', async (req, res) => {
       endDate, 
       owner, 
       difficulty: difficulty || 'medium',
-      participants: [{ userId: owner, completedDays: [] }] 
+      participants: [{ userId: owner, completedDays: [], joinedAt: new Date(startDate) }] 
     };
     if (imageUrl) {
       challengeData.imageUrl = imageUrl;
@@ -664,6 +673,246 @@ router.post('/:id/end-result-mission', async (req, res) => {
   }
 });
 
+router.post('/:id/end-habit-mission', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let { completedDays } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid challenge id' });
+    }
+
+    if (!completedDays || !Array.isArray(completedDays)) {
+      return res.status(400).json({ message: 'completedDays must be an array' });
+    }
+
+    completedDays = [...new Set(completedDays)]
+      .filter((day) => typeof day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day))
+      .sort();
+
+    const challenge = await Challenge.findById(id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (challenge.challengeType !== 'habit') {
+      return res.status(400).json({ message: 'This route is only for habit challenges' });
+    }
+
+    const authUserId = decodeOptionalAuthUserId(req);
+    if (!authUserId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    const participantIndex = challenge.participants.findIndex(
+      (p) => p.userId && p.userId.toString() === authUserId.toString()
+    );
+
+    if (participantIndex === -1) {
+      return res.status(403).json({ message: 'You are not a participant of this challenge' });
+    }
+
+    const participant = challenge.participants[participantIndex];
+    if (participant.habitMissionEndedAt) {
+      return res.status(400).json({ message: 'Mission completion already recorded' });
+    }
+
+    const { clientDayStr } = getClientDayRange(req, 0);
+    if (!isMissionFinalDay(challenge, clientDayStr)) {
+      return res.status(400).json({ message: 'Mission can only be completed on the final day' });
+    }
+
+    if (!completedDays.includes(clientDayStr)) {
+      return res.status(400).json({ message: 'Final day must be marked as completed' });
+    }
+
+    const prevCompletedDays = Array.isArray(participant.completedDays) ? participant.completedDays : [];
+    const prevCompletedDayKeys = new Set(
+      prevCompletedDays.map((day) => normalizeDateLikeToYmd(day)).filter(Boolean)
+    );
+    const addedDays = completedDays.filter((day) => !prevCompletedDayKeys.has(day));
+
+    challenge.participants[participantIndex].completedDays = completedDays;
+    challenge.participants[participantIndex].habitMissionEndedAt = new Date();
+
+    if (!participant.joinedAt) {
+      challenge.participants[participantIndex].joinedAt = challenge.startDate;
+    }
+
+    await challenge.save();
+
+    if (addedDays.length > 0) {
+      await clearReactivationStreakFlag(authUserId);
+    }
+
+    const userSelect = 'name email avatarUrl createdAt _id xp sparks';
+    let updatedUser = await User.findById(authUserId).select(userSelect);
+    const xpResults = [];
+    const sparksResults = [];
+
+    for (const day of addedDays) {
+      const xpResult = await awardHabitDayXp(authUserId, challenge._id, day);
+      xpResults.push(xpResult);
+      if (xpResult.awarded && xpResult.user) {
+        updatedUser = xpResult.user;
+      }
+
+      const sparksResult = await awardHabitDaySparks(authUserId, challenge._id, day);
+      sparksResults.push(sparksResult);
+      if (sparksResult.awarded && sparksResult.user) {
+        updatedUser = sparksResult.user;
+      }
+    }
+
+    const updatedParticipant = challenge.participants[participantIndex];
+    const missionRewardsSummary = buildHabitMissionRewardSummary(challenge, updatedParticipant);
+
+    challenge.participants[participantIndex].completionTier = missionRewardsSummary.tier;
+    await challenge.save();
+
+    if (missionRewardsSummary.totalXp > 0) {
+      const completionXpResult = await awardTieredHabitCompletionXp(
+        authUserId,
+        challenge._id,
+        missionRewardsSummary.totalXp
+      );
+      xpResults.push(completionXpResult);
+      if (completionXpResult.awarded && completionXpResult.user) {
+        updatedUser = completionXpResult.user;
+      }
+    }
+
+    if (missionRewardsSummary.totalSparks > 0) {
+      const missionSparksResult = await awardTieredMissionCompletionSparks(
+        authUserId,
+        challenge._id,
+        missionRewardsSummary.totalSparks
+      );
+      sparksResults.push(missionSparksResult);
+      if (missionSparksResult.awarded && missionSparksResult.user) {
+        updatedUser = missionSparksResult.user;
+      }
+    }
+
+    const rewardPayload = buildRewardPayload({
+      user: serializeUserForClient(updatedUser),
+      xpResults,
+      sparksResults
+    });
+
+    const populatedChallenge = await Challenge.findById(id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+
+    res.json({
+      message: 'Habit mission completed successfully',
+      challenge: populatedChallenge,
+      missionRewardsSummary,
+      ...rewardPayload
+    });
+  } catch (error) {
+    console.error('Error ending habit mission:', error);
+    res.status(500).json({ message: 'Error completing habit mission', error: error.message });
+  }
+});
+
+router.post('/:id/continue-solo', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { customEndDate } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid challenge id' });
+    }
+
+    const authUserId = decodeOptionalAuthUserId(req);
+    if (!authUserId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    const sourceChallenge = await Challenge.findById(id);
+    if (!sourceChallenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    if (sourceChallenge.challengeType !== 'habit') {
+      return res.status(400).json({ message: 'Only habit missions support solo continuation' });
+    }
+
+    if (!isChallengeFinished(sourceChallenge)) {
+      return res.status(400).json({ message: 'Group mission must be finished before continuing solo' });
+    }
+
+    const participant = findChallengeParticipant(sourceChallenge, authUserId);
+    if (!participant) {
+      return res.status(403).json({ message: 'You are not a participant of this challenge' });
+    }
+
+    if (!needsSoloContinuation(sourceChallenge, participant)) {
+      return res.status(400).json({ message: 'Solo continuation is not available for this mission' });
+    }
+
+    const joinedKey = getParticipantJoinedAtKey(sourceChallenge, participant);
+    const { startDate, endDate } = getSoloContinuationDates(
+      sourceChallenge,
+      participant,
+      customEndDate
+    );
+
+    const personalChallenge = {
+      ...sourceChallenge.toObject(),
+      startDate: joinedKey
+    };
+
+    const completedDays = (participant.completedDays || [])
+      .map((day) => normalizeDateLikeToYmd(day))
+      .filter((day) => day && day >= joinedKey && isDateScheduledForChallenge(personalChallenge, day));
+
+    const frozenDays = (participant.frozenDays || [])
+      .map((day) => normalizeDateLikeToYmd(day))
+      .filter((day) => day && day >= joinedKey);
+
+    const secondChanceDays = (participant.secondChanceDays || [])
+      .map((day) => normalizeDateLikeToYmd(day))
+      .filter((day) => day && day >= joinedKey);
+
+    const soloChallenge = new Challenge({
+      title: sourceChallenge.title,
+      description: sourceChallenge.description || '',
+      imageUrl: sourceChallenge.imageUrl || '',
+      privacy: 'private',
+      challengeType: 'habit',
+      frequency: sourceChallenge.frequency || 'daily',
+      startDate,
+      endDate,
+      owner: authUserId,
+      difficulty: sourceChallenge.difficulty || 'medium',
+      allowComments: sourceChallenge.allowComments !== false,
+      participants: [{
+        userId: authUserId,
+        completedDays,
+        frozenDays,
+        secondChanceDays,
+        joinedAt: startDate
+      }]
+    });
+
+    await soloChallenge.save();
+
+    const populatedChallenge = await Challenge.findById(soloChallenge._id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+
+    res.status(201).json({
+      message: 'Solo mission created successfully',
+      challenge: populatedChallenge
+    });
+  } catch (error) {
+    console.error('Error continuing solo mission:', error);
+    res.status(500).json({ message: 'Error creating solo mission', error: error.message });
+  }
+});
+
 // Update challenge
 router.put('/:id', async (req, res) => {
   try {
@@ -861,7 +1110,8 @@ router.post('/:id/join', async (req, res) => {
     }
 
     // Add new participant with empty completedDays array
-    challenge.participants.push({ userId, completedDays: [] });
+    const { startUtc: joinDate } = getClientDayRange(req, 0);
+    challenge.participants.push({ userId, completedDays: [], joinedAt: joinDate });
     await challenge.save();
 
     const ownerId = challenge.owner?._id || challenge.owner;
@@ -1394,11 +1644,6 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
       ? prevParticipant.completedDays
       : [];
 
-    const wasHabitCompletedBefore = isHabitChallengeCompleted(challenge, {
-      ...prevParticipant.toObject?.() || prevParticipant,
-      completedDays: prevCompletedDays
-    });
-
     const prevCompletedDayKeys = new Set(
       prevCompletedDays
         .map((day) => normalizeDateLikeToYmd(day))
@@ -1431,34 +1676,6 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
       if (sparksResult.awarded && sparksResult.user) {
         updatedUser = sparksResult.user;
       }
-    }
-
-    let completionXpResult = null;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const endDate = new Date(challenge.endDate);
-    endDate.setHours(0, 0, 0, 0);
-
-    if (endDate < today && completedDays.length > 0) {
-      completionXpResult = await awardHabitCompletionXp(userId, challenge._id);
-      if (completionXpResult.awarded && completionXpResult.user) {
-        updatedUser = completionXpResult.user;
-      }
-    }
-
-    const updatedParticipant = challenge.participants[participantIndex];
-    const isHabitCompletedNow = isHabitChallengeCompleted(challenge, updatedParticipant);
-
-    if (!wasHabitCompletedBefore && isHabitCompletedNow) {
-      const missionSparksResult = await awardMissionCompletionSparks(userId, challenge._id);
-      sparksResults.push(missionSparksResult);
-      if (missionSparksResult.awarded && missionSparksResult.user) {
-        updatedUser = missionSparksResult.user;
-      }
-    }
-
-    if (completionXpResult) {
-      xpResults.push(completionXpResult);
     }
 
     const rewardPayload = buildRewardPayload({

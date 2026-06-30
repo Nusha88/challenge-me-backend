@@ -205,6 +205,19 @@ async function awardMissionCompletionSparks(userId, challengeId) {
   );
 }
 
+async function awardTieredMissionCompletionSparks(userId, challengeId, amount) {
+  if (!amount || amount <= 0) {
+    return { awarded: false, sparksGained: 0, reason: 'zero_amount' };
+  }
+
+  return awardSparksOnce(
+    userId,
+    buildMissionCompletionSparksKey(challengeId),
+    amount,
+    { type: SPARKS_EVENT_TYPES.MISSION_COMPLETION, challengeId }
+  );
+}
+
 async function awardMissionCommentSparks(userId, challengeId, localDate) {
   return awardCappedSparksOnce(
     userId,
@@ -266,6 +279,7 @@ module.exports = {
   awardManifestSparks,
   awardStreakMilestoneSparks,
   awardMissionCompletionSparks,
+  awardTieredMissionCompletionSparks,
   awardMissionCommentSparks,
   spendSparksOnce,
   DAILY_SPARKS_CAP

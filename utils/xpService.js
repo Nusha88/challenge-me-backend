@@ -78,6 +78,18 @@ async function awardHabitCompletionXp(userId, challengeId) {
   );
 }
 
+async function awardTieredHabitCompletionXp(userId, challengeId, amount) {
+  return awardXpOnce(
+    userId,
+    buildHabitCompletionXpKey(challengeId),
+    amount,
+    {
+      type: XP_EVENT_TYPES.HABIT_COMPLETION,
+      challengeId
+    }
+  );
+}
+
 async function awardResultActionXp(userId, challengeId, actionId) {
   return awardXpOnce(
     userId,
@@ -156,6 +168,7 @@ module.exports = {
   awardXpOnce,
   awardHabitDayXp,
   awardHabitCompletionXp,
+  awardTieredHabitCompletionXp,
   awardResultActionXp,
   awardResultCompletionXp,
   awardDailyFullCompletionXp,

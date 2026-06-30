@@ -253,16 +253,11 @@ function isDateScheduledForChallenge(challenge, dateStr) {
 function isHabitChallengeCompleted(challenge, participant) {
   if (!challenge || !participant) return false;
 
-  const totalScheduled = countScheduledMissionDays(
-    challenge.startDate,
-    challenge.endDate,
-    challenge.frequency
-  );
+  const { countPersonalScheduledDays, countPersonalEffectiveDays } = require('./missionTierService');
+  const totalScheduled = countPersonalScheduledDays(challenge, participant);
   if (totalScheduled <= 0) return false;
 
-  const completedDayKeys = new Set(getParticipantEffectiveDays(participant));
-
-  return completedDayKeys.size >= totalScheduled;
+  return countPersonalEffectiveDays(challenge, participant) >= totalScheduled;
 }
 
 function isPastEndDate(endDate) {
