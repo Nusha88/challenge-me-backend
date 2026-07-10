@@ -294,4 +294,15 @@ const challengeSchema = new mongoose.Schema(
   }
 );
 
+// Indexes to back the common query/filter patterns and avoid full collection
+// scans (challenge listing, per-user lookups, scheduler habit queries).
+challengeSchema.index({ createdAt: -1 });
+challengeSchema.index({ privacy: 1, createdAt: -1 });
+challengeSchema.index({ owner: 1, createdAt: -1 });
+challengeSchema.index({ challengeType: 1, privacy: 1 });
+challengeSchema.index({ 'participants.userId': 1 });
+challengeSchema.index({ challengeType: 1, 'participants.userId': 1 });
+challengeSchema.index({ startDate: 1 });
+challengeSchema.index({ endDate: 1 });
+
 module.exports = mongoose.model('Challenge', challengeSchema);

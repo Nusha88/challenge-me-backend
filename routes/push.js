@@ -2,29 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { getVapidPublicKey, getVapidDiagnostics } = require('../utils/pushService');
-
-// Middleware to authenticate token - use the same as auth routes
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ message: 'Access token required' });
-  }
-
-  const jwt = require('jsonwebtoken');
-  // Use the same JWT_SECRET as auth routes
-  const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      console.error('[Push] Token verification failed:', err.message);
-      return res.status(403).json({ message: 'Invalid or expired token' });
-    }
-    req.user = user;
-    next();
-  });
-};
+const authenticateToken = require('../middleware/authenticateToken');
 
 // Get VAPID public key
 router.get('/vapid-public-key', (req, res) => {
@@ -33,7 +11,7 @@ router.get('/vapid-public-key', (req, res) => {
     res.json({ publicKey });
   } catch (error) {
     console.error('[Push] Error getting VAPID public key:', error);
-    res.status(500).json({ message: 'Error getting VAPID key', error: error.message });
+    res.status(500).json({ message: 'Error getting VAPID key', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -44,7 +22,7 @@ router.get('/diagnostics', authenticateToken, (req, res) => {
     res.json(diag)
   } catch (error) {
     console.error('[Push] Error getting VAPID diagnostics:', error)
-    res.status(500).json({ message: 'Error getting diagnostics', error: error.message })
+    res.status(500).json({ message: 'Error getting diagnostics', error: process.env.NODE_ENV === 'development' ? error.message : undefined })
   }
 })
 
@@ -77,7 +55,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
     res.json({ message: 'Push subscription saved successfully' });
   } catch (error) {
     console.error('[Push] Error saving push subscription:', error);
-    res.status(500).json({ message: 'Error saving push subscription', error: error.message });
+    res.status(500).json({ message: 'Error saving push subscription', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -95,7 +73,7 @@ router.post('/unsubscribe', authenticateToken, async (req, res) => {
     res.json({ message: 'Push subscription removed successfully' });
   } catch (error) {
     console.error('Error removing push subscription:', error);
-    res.status(500).json({ message: 'Error removing push subscription', error: error.message });
+    res.status(500).json({ message: 'Error removing push subscription', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -111,7 +89,7 @@ router.get('/status', authenticateToken, async (req, res) => {
     res.json({ hasSubscription });
   } catch (error) {
     console.error(`[Push] Error checking push subscription status:`, error);
-    res.status(500).json({ message: 'Error checking push subscription status', error: error.message });
+    res.status(500).json({ message: 'Error checking push subscription status', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -134,7 +112,7 @@ router.get('/daily-recap-settings', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[Push] Error getting daily recap settings:', error);
-    res.status(500).json({ message: 'Error getting daily recap settings', error: error.message });
+    res.status(500).json({ message: 'Error getting daily recap settings', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -188,7 +166,7 @@ router.put('/daily-recap-settings', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[Push] Error updating daily recap settings:', error);
-    res.status(500).json({ message: 'Error updating daily recap settings', error: error.message });
+    res.status(500).json({ message: 'Error updating daily recap settings', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 

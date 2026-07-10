@@ -8,6 +8,7 @@ const authRoutes = require('./routes/auth');
 const challengeRoutes = require('./routes/challenges');
 const notificationsRoutes = require('./routes/notifications');
 const pushRoutes = require('./routes/push');
+const uploadRoutes = require('./routes/uploads');
 const { startDailyRecapScheduler } = require('./utils/dailyRecapScheduler');
 const { startWeeklyChronicleScheduler } = require('./utils/weeklyChronicleScheduler');
 const { startReactivationScheduler } = require('./utils/reactivationScheduler');
@@ -18,19 +19,28 @@ if (!process.env.ATLAS_URI) {
   process.exit(1);
 }
 
+if (!process.env.JWT_SECRET) {
+  console.error('JWT_SECRET is not defined in environment variables');
+  process.exit(1);
+}
+
 const app = express();
 
 app.set('trust proxy', 1);
 
 // CORS configuration
-const defaultAllowedOrigins = [
+// Local dev origins are only trusted outside production.
+const isProduction = process.env.NODE_ENV === 'production';
+const devOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:4173',
   'http://127.0.0.1:4173',
-  'http://localhost:3000',
-  'https://ignite-me.app'
+  'http://localhost:3000'
 ];
+const defaultAllowedOrigins = isProduction
+  ? ['https://ignite-me.app']
+  : [...devOrigins, 'https://ignite-me.app'];
 
 const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || 'https://ignite-me.app')
   .split(',')
@@ -54,6 +64,10 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
+// Image upload proxy is mounted before the global JSON parser so it can use its
+// own larger body-size limit without loosening limits for every other route.
+app.use('/api/uploads', uploadRoutes);
 
 // Middleware
 app.use(express.json());

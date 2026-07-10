@@ -3,6 +3,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const Challenge = require('../models/Challenge');
 const User = require('../models/User');
+const authenticateToken = require('../middleware/authenticateToken');
 const { getClientDayRange, getClientLocalHour, normalizeDateLikeToYmd } = require('../utils/dateHelpers');
 const { findByClientDay, upsertChecklist } = require('../utils/dailyChecklistService');
 const {
@@ -100,19 +101,14 @@ async function maybeAwardMissionCommentSparks(req, userId, challenge, ownerId) {
   return { finalUser, sparksResults };
 }
 
-function decodeOptionalAuthUserId(req) {
-  const authHeader = req.headers['authorization'];
-  if (!authHeader) return null;
-  const token = authHeader.split(' ')[1];
-  if (!token) return null;
-  try {
-    const jwt = require('jsonwebtoken');
-    const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
-    const decoded = jwt.verify(token, JWT_SECRET);
-    return decoded?.id || null;
-  } catch {
-    return null;
-  }
+// Returns the authenticated user id if a valid token is present, else null.
+// Used by public/optional endpoints for personalization.
+const decodeOptionalAuthUserId = authenticateToken.getOptionalUserId;
+
+// Escapes user input before using it inside a MongoDB $regex to avoid
+// ReDoS / expensive-pattern denial of service.
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function flattenResultActionStates(actions) {
@@ -276,11 +272,13 @@ function isChallengeCompleted(challenge, today) {
 }
 
 // Create challenge
-router.post('/', async (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward } = req.body;
+    const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward } = req.body;
+    // Owner is always the authenticated user, never taken from the body.
+    const owner = req.user.id;
 
-    if (!title || !startDate || !endDate || !owner) {
+    if (!title || !startDate || !endDate) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
@@ -331,7 +329,7 @@ router.post('/', async (req, res) => {
       ...welcomeBonusPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error creating challenge', error: error.message });
+    res.status(500).json({ message: 'Error creating challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -452,7 +450,7 @@ router.patch('/:id/actions', async (req, res) => {
       ...rewardPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating actions', error: error.message });
+    res.status(500).json({ message: 'Error updating actions', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -620,7 +618,7 @@ router.post('/:id/actions/:actionId/complete', async (req, res) => {
     });
   } catch (error) {
     console.error('Error completing action:', error);
-    res.status(500).json({ message: 'Error completing action', error: error.message });
+    res.status(500).json({ message: 'Error completing action', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -669,7 +667,7 @@ router.post('/:id/end-result-mission', async (req, res) => {
     });
   } catch (error) {
     console.error('Error ending result mission:', error);
-    res.status(500).json({ message: 'Error ending mission', error: error.message });
+    res.status(500).json({ message: 'Error ending mission', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -812,7 +810,7 @@ router.post('/:id/end-habit-mission', async (req, res) => {
     });
   } catch (error) {
     console.error('Error ending habit mission:', error);
-    res.status(500).json({ message: 'Error completing habit mission', error: error.message });
+    res.status(500).json({ message: 'Error completing habit mission', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -909,7 +907,7 @@ router.post('/:id/continue-solo', async (req, res) => {
     });
   } catch (error) {
     console.error('Error continuing solo mission:', error);
-    res.status(500).json({ message: 'Error creating solo mission', error: error.message });
+    res.status(500).json({ message: 'Error creating solo mission', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -917,7 +915,7 @@ router.post('/:id/continue-solo', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, startDate, endDate, owner, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments, difficulty, reward } = req.body;
+    const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments, difficulty, reward } = req.body;
 
     if (!title || !startDate || !endDate) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -939,12 +937,10 @@ router.put('/:id', async (req, res) => {
       return res.status(403).json({ message: 'You are not authorized to update this challenge' });
     }
 
-    const effectiveOwnerId = owner || existingChallenge.owner;
+    // Ownership is immutable via this endpoint; never reassign from the body.
+    const effectiveOwnerId = existingChallenge.owner;
 
     const update = { title, description: description || '', startDate, endDate };
-    if (owner) {
-      update.owner = owner;
-    }
     if (imageUrl !== undefined) {
       update.imageUrl = imageUrl;
     }
@@ -1075,19 +1071,15 @@ router.put('/:id', async (req, res) => {
       ...putRewardPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating challenge', error: error.message });
+    res.status(500).json({ message: 'Error updating challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Join challenge
-router.post('/:id/join', async (req, res) => {
+router.post('/:id/join', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required to join a challenge' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(id);
 
@@ -1125,19 +1117,15 @@ router.post('/:id/join', async (req, res) => {
       ...welcomeBonusPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error joining challenge', error: error.message });
+    res.status(500).json({ message: 'Error joining challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Leave challenge
-router.post('/:id/leave', async (req, res) => {
+router.post('/:id/leave', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(id)
       .populate('owner', 'name avatarUrl')
@@ -1170,7 +1158,7 @@ router.post('/:id/leave', async (req, res) => {
       challenge: updatedChallenge
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error leaving challenge', error: error.message });
+    res.status(500).json({ message: 'Error leaving challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1262,7 +1250,7 @@ router.post('/:id/extend', async (req, res) => {
       ...rewardPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error extending challenge', error: error.message });
+    res.status(500).json({ message: 'Error extending challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1353,7 +1341,7 @@ router.post('/:id/second-chance', async (req, res) => {
       ...rewardPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error applying second chance', error: error.message });
+    res.status(500).json({ message: 'Error applying second chance', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1377,13 +1365,14 @@ router.get('/', async (req, res) => {
     }
     
     // Filter by title (search)
-    if (title && title.trim()) {
-      query.title = { $regex: title.trim(), $options: 'i' }; // Case-insensitive search
+    if (title && typeof title === 'string' && title.trim()) {
+      query.title = { $regex: escapeRegExp(title.trim()), $options: 'i' }; // Case-insensitive search
     }
-    
-    // Filter by owner (createdBy is an alias for owner)
+
+    // Filter by owner (createdBy is an alias for owner). Cast to string to
+    // prevent query-operator injection via ?owner[$ne]=...
     if (owner || createdBy) {
-      query.owner = owner || createdBy;
+      query.owner = String(owner || createdBy);
     }
     
     // Filter by privacy - exclude private challenges
@@ -1573,7 +1562,7 @@ router.get('/', async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching challenges', error: error.message });
+    res.status(500).json({ message: 'Error fetching challenges', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1595,7 +1584,7 @@ router.get('/main-ritual', async (req, res) => {
 
     res.json({ challenge: enriched ?? null });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching main ritual', error: error.message });
+    res.status(500).json({ message: 'Error fetching main ritual', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1690,7 +1679,7 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
       ...rewardPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating completed days', error: error.message });
+    res.status(500).json({ message: 'Error updating completed days', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1820,7 +1809,7 @@ router.get('/user/:userId', async (req, res) => {
 
     res.json({ challenges: challengesWithWatchers });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching challenges', error: error.message });
+    res.status(500).json({ message: 'Error fetching challenges', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1852,7 +1841,7 @@ router.get('/watched/feed/:userId', async (req, res) => {
 
     res.json({ activities });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching watched feed', error: error.message });
+    res.status(500).json({ message: 'Error fetching watched feed', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1878,7 +1867,7 @@ router.get('/watched/:userId', async (req, res) => {
 
     res.json({ challenges: challengesWithWatchers });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching watched challenges', error: error.message });
+    res.status(500).json({ message: 'Error fetching watched challenges', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1904,12 +1893,12 @@ router.get('/:id', async (req, res) => {
     
     res.json(challengeObj);
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching challenge', error: error.message });
+    res.status(500).json({ message: 'Error fetching challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Delete challenge
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1919,24 +1908,26 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
+    // Only the owner may delete their challenge.
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (!ownerId || ownerId.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ message: 'You are not authorized to delete this challenge' });
+    }
+
     await Challenge.findByIdAndDelete(id);
 
     res.json({
       message: 'Challenge deleted successfully'
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error deleting challenge', error: error.message });
+    res.status(500).json({ message: 'Error deleting challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Watch a challenge
-router.post('/:id/watch', async (req, res) => {
+router.post('/:id/watch', authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.body;
-    
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
     if (!challenge) {
@@ -1961,18 +1952,14 @@ router.post('/:id/watch', async (req, res) => {
 
     res.json({ message: 'Challenge added to watch list', watchedChallenges: user.watchedChallenges });
   } catch (error) {
-    res.status(500).json({ message: 'Error watching challenge', error: error.message });
+    res.status(500).json({ message: 'Error watching challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Unwatch a challenge
-router.post('/:id/unwatch', async (req, res) => {
+router.post('/:id/unwatch', authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.body;
-    
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(req.params.id);
     if (!challenge) {
@@ -1992,19 +1979,16 @@ router.post('/:id/unwatch', async (req, res) => {
 
     res.json({ message: 'Challenge removed from watch list', watchedChallenges: user.watchedChallenges });
   } catch (error) {
-    res.status(500).json({ message: 'Error unwatching challenge', error: error.message });
+    res.status(500).json({ message: 'Error unwatching challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Add a comment to a challenge
-router.post('/:id/comments', async (req, res) => {
+router.post('/:id/comments', authenticateToken, async (req, res) => {
   try {
-    const { userId, text, imageUrl } = req.body;
-    
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
-    
+    const { text, imageUrl } = req.body;
+    const userId = req.user.id;
+
     if ((!text || !text.trim()) && !imageUrl) {
       return res.status(400).json({ message: 'Comment text or image is required' });
     }
@@ -2063,7 +2047,7 @@ router.post('/:id/comments', async (req, res) => {
       ...rewardPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error adding comment', error: error.message });
+    res.status(500).json({ message: 'Error adding comment', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -2114,17 +2098,18 @@ router.get('/:id/comments', async (req, res) => {
       allowComments: challenge.allowComments 
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching comments', error: error.message });
+    res.status(500).json({ message: 'Error fetching comments', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Reply to a comment
-router.post('/:id/comments/:commentId/reply', async (req, res) => {
+router.post('/:id/comments/:commentId/reply', authenticateToken, async (req, res) => {
   try {
-    const { userId, text, mentionedUserId, imageUrl } = req.body;
-    
-    if (!userId || !text || !text.trim()) {
-      return res.status(400).json({ message: 'User ID and reply text are required' });
+    const { text, mentionedUserId, imageUrl } = req.body;
+    const userId = req.user.id;
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ message: 'Reply text is required' });
     }
 
     const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
@@ -2183,18 +2168,14 @@ router.post('/:id/comments/:commentId/reply', async (req, res) => {
 
     res.status(201).json({ message: 'Reply added successfully', reply: newReply, ...rewardPayload });
   } catch (error) {
-    res.status(500).json({ message: 'Error adding reply', error: error.message });
+    res.status(500).json({ message: 'Error adding reply', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Delete a comment (only by owner or comment author)
-router.delete('/:id/comments/:commentId', async (req, res) => {
+router.delete('/:id/comments/:commentId', authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.body;
-    
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(req.params.id);
     if (!challenge) {
@@ -2219,18 +2200,14 @@ router.delete('/:id/comments/:commentId', async (req, res) => {
 
     res.json({ message: 'Comment deleted successfully' });
   } catch (error) {
-    res.status(500).json({ message: 'Error deleting comment', error: error.message });
+    res.status(500).json({ message: 'Error deleting comment', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Get the current user's private diary entries (owner only)
-router.get('/:id/diary', async (req, res) => {
+router.get('/:id/diary', authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.query;
-
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(req.params.id)
       .populate('userDiaryEntries.userId', 'name avatarUrl')
@@ -2252,19 +2229,16 @@ router.get('/:id/diary', async (req, res) => {
 
     res.json({ entries });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching diary entries', error: error.message });
+    res.status(500).json({ message: 'Error fetching diary entries', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Add a private diary entry (owner only), optionally sharing it to the community feed
-router.post('/:id/diary', async (req, res) => {
+router.post('/:id/diary', authenticateToken, async (req, res) => {
   try {
-    const { userId, text, imageUrl, shareToCommunity, isTriumph, actionTitle } = req.body;
+    const { text, imageUrl, shareToCommunity, isTriumph, actionTitle } = req.body;
+    const userId = req.user.id;
     const triumphEntry = isTriumph === true;
-
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
 
     if ((!text || !text.trim()) && !imageUrl) {
       return res.status(400).json({ message: 'Diary text or image is required' });
@@ -2322,18 +2296,14 @@ router.post('/:id/diary', async (req, res) => {
       sharedCommentId
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error adding diary entry', error: error.message });
+    res.status(500).json({ message: 'Error adding diary entry', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Delete a private diary entry (owner / author only)
-router.delete('/:id/diary/:entryId', async (req, res) => {
+router.delete('/:id/diary/:entryId', authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(req.params.id);
     if (!challenge) {
@@ -2355,17 +2325,18 @@ router.delete('/:id/diary/:entryId', async (req, res) => {
 
     res.json({ message: 'Diary entry deleted successfully' });
   } catch (error) {
-    res.status(500).json({ message: 'Error deleting diary entry', error: error.message });
+    res.status(500).json({ message: 'Error deleting diary entry', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Reply to a reply (nested reply)
-router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) => {
+router.post('/:id/comments/:commentId/replies/:replyId/reply', authenticateToken, async (req, res) => {
   try {
-    const { userId, text, mentionedUserId, imageUrl } = req.body;
-    
-    if (!userId || !text || !text.trim()) {
-      return res.status(400).json({ message: 'User ID and reply text are required' });
+    const { text, mentionedUserId, imageUrl } = req.body;
+    const userId = req.user.id;
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ message: 'Reply text is required' });
     }
 
     const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
@@ -2458,18 +2429,14 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', async (req, res) 
       ...rewardPayload
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error adding nested reply', error: error.message });
+    res.status(500).json({ message: 'Error adding nested reply', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Delete a reply (only by owner, comment author, or reply author)
-router.delete('/:id/comments/:commentId/replies/:replyId', async (req, res) => {
+router.delete('/:id/comments/:commentId/replies/:replyId', authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.body;
-    
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(req.params.id);
     if (!challenge) {
@@ -2502,18 +2469,14 @@ router.delete('/:id/comments/:commentId/replies/:replyId', async (req, res) => {
 
     res.json({ message: 'Reply deleted successfully' });
   } catch (error) {
-    res.status(500).json({ message: 'Error deleting reply', error: error.message });
+    res.status(500).json({ message: 'Error deleting reply', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Delete a nested reply
-router.delete('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId', async (req, res) => {
+router.delete('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId', authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.body;
-    
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
-    }
+    const userId = req.user.id;
 
     const challenge = await Challenge.findById(req.params.id);
     if (!challenge) {
@@ -2553,17 +2516,18 @@ router.delete('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId'
 
     res.json({ message: 'Nested reply deleted successfully' });
   } catch (error) {
-    res.status(500).json({ message: 'Error deleting nested reply', error: error.message });
+    res.status(500).json({ message: 'Error deleting nested reply', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Add or remove reaction to a comment
-router.post('/:id/comments/:commentId/reactions', async (req, res) => {
+router.post('/:id/comments/:commentId/reactions', authenticateToken, async (req, res) => {
   try {
-    const { userId, emoji } = req.body;
-    
-    if (!userId || !emoji) {
-      return res.status(400).json({ message: 'User ID and emoji are required' });
+    const { emoji } = req.body;
+    const userId = req.user.id;
+
+    if (!emoji) {
+      return res.status(400).json({ message: 'Emoji is required' });
     }
 
     const challenge = await Challenge.findById(req.params.id);
@@ -2629,17 +2593,18 @@ router.post('/:id/comments/:commentId/reactions', async (req, res) => {
       reactions: populatedReactions
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating reaction', error: error.message });
+    res.status(500).json({ message: 'Error updating reaction', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Add or remove reaction to a reply
-router.post('/:id/comments/:commentId/replies/:replyId/reactions', async (req, res) => {
+router.post('/:id/comments/:commentId/replies/:replyId/reactions', authenticateToken, async (req, res) => {
   try {
-    const { userId, emoji } = req.body;
-    
-    if (!userId || !emoji) {
-      return res.status(400).json({ message: 'User ID and emoji are required' });
+    const { emoji } = req.body;
+    const userId = req.user.id;
+
+    if (!emoji) {
+      return res.status(400).json({ message: 'Emoji is required' });
     }
 
     const challenge = await Challenge.findById(req.params.id);
@@ -2710,17 +2675,18 @@ router.post('/:id/comments/:commentId/replies/:replyId/reactions', async (req, r
       reactions: populatedReactions
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating reaction', error: error.message });
+    res.status(500).json({ message: 'Error updating reaction', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Add or remove reaction to a nested reply
-router.post('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId/reactions', async (req, res) => {
+router.post('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId/reactions', authenticateToken, async (req, res) => {
   try {
-    const { userId, emoji } = req.body;
-    
-    if (!userId || !emoji) {
-      return res.status(400).json({ message: 'User ID and emoji are required' });
+    const { emoji } = req.body;
+    const userId = req.user.id;
+
+    if (!emoji) {
+      return res.status(400).json({ message: 'Emoji is required' });
     }
 
     const challenge = await Challenge.findById(req.params.id);
@@ -2796,7 +2762,7 @@ router.post('/:id/comments/:commentId/replies/:replyId/replies/:nestedReplyId/re
       reactions: populatedReactions
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating reaction', error: error.message });
+    res.status(500).json({ message: 'Error updating reaction', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 

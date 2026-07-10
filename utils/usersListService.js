@@ -1,8 +1,13 @@
+// Escapes user input before using it in a $regex to avoid ReDoS / injection.
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function buildUserMatchStage(searchQuery) {
   if (!searchQuery) return {};
 
   return {
-    name: { $regex: searchQuery, $options: 'i' }
+    name: { $regex: escapeRegExp(searchQuery), $options: 'i' }
   };
 }
 

@@ -13,4 +13,20 @@ const registerRateLimiter = rateLimit({
   }
 });
 
+// Protects credential-guessing / abuse endpoints (login, forgot/reset password).
+const loginWindowMs = Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS || '900000', 10); // 15 min
+const loginMax = Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX || '10', 10);
+
+const authRateLimiter = rateLimit({
+  windowMs: Number.isFinite(loginWindowMs) && loginWindowMs > 0 ? loginWindowMs : 900000,
+  max: Number.isFinite(loginMax) && loginMax > 0 ? loginMax : 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    message: 'Too many attempts from this IP. Please try again later.'
+  }
+});
+
 module.exports = registerRateLimiter;
+module.exports.registerRateLimiter = registerRateLimiter;
+module.exports.authRateLimiter = authRateLimiter;

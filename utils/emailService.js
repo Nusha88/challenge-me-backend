@@ -10,11 +10,18 @@ const REGISTRATION_NOTIFY_EMAIL = process.env.REGISTRATION_NOTIFY_EMAIL;
 const PRODUCTION_FRONTEND_URL = process.env.FRONTEND_URL || 'https://ignite-me.app';
 const LOCAL_FRONTEND_URL = 'http://localhost:5173';
 
-if (!RESEND_API_KEY) {
-  throw new Error('RESEND_API_KEY environment variable is required');
+// Email is optional for local development: if no key is configured we warn and
+// no-op instead of crashing the whole server at import time (mirrors the push
+// service's graceful degradation).
+const isEmailConfigured = Boolean(RESEND_API_KEY);
+
+if (!isEmailConfigured) {
+  console.warn('[Email] RESEND_API_KEY is not set — transactional emails are disabled.');
 }
 
-const resend = new Resend(RESEND_API_KEY);
+const resend = isEmailConfigured
+  ? new Resend(RESEND_API_KEY)
+  : { emails: { send: async () => ({ data: null, error: null }) } };
 
 /**
  * Determine the frontend URL based on request origin

@@ -11,8 +11,22 @@ const {
   sendWeeklyChronicleEmail,
   sendReactivationEmail
 } = require('../utils/emailService');
+const crypto = require('crypto');
 const { buildWeeklyChronicleReport, resolveUserReportLanguage } = require('../utils/weeklyChronicleReport');
-const registerRateLimiter = require('../middleware/registerRateLimiter');
+const { registerRateLimiter, authRateLimiter } = require('../middleware/registerRateLimiter');
+const authenticateToken = require('../middleware/authenticateToken');
+
+// Hashes a password-reset token so only its hash is stored at rest.
+function hashResetToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+// Basic guard against javascript:/data: and other unsafe avatar URL schemes.
+function isSafeAvatarUrl(url) {
+  if (typeof url !== 'string') return false;
+  if (url === '') return true;
+  return /^https?:\/\//i.test(url.trim());
+}
 
 const {
   getClientDayRange,
@@ -76,19 +90,8 @@ function serializeUserForClient(user) {
   };
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
-
-// JWT middleware (for future use)
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ message: 'No token provided' });
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ message: 'Invalid token' });
-    req.user = user;
-    next();
-  });
-}
+// Signing secret is guaranteed present by the boot-time check in app.js.
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Get all users
 router.get('/users', async (req, res) => {
@@ -121,8 +124,7 @@ router.get('/users', async (req, res) => {
     console.error('Error in /users endpoint:', error);
     res.status(500).json({
       message: 'Error fetching users',
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 });
@@ -140,9 +142,9 @@ router.get('/users/:id', async (req, res) => {
       });
     }
     
+    // Public profile lookup: do NOT expose email for arbitrary users.
     const user = await User.findById(id, {
       name: 1,
-      email: 1,
       avatarUrl: 1,
       xp: 1,
       sparks: 1,
@@ -173,8 +175,7 @@ router.get('/users/:id', async (req, res) => {
     console.error('Error in /users/:id endpoint:', error);
     res.status(500).json({
       message: 'Error fetching user',
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 });
@@ -198,6 +199,9 @@ router.post('/register', registerRateLimiter, async (req, res) => {
       return res.status(400).json({
         message: 'Password must be at least 6 characters'
       });
+    }
+    if (req.body.avatarUrl !== undefined && !isSafeAvatarUrl(req.body.avatarUrl)) {
+      return res.status(400).json({ message: 'Invalid avatar URL' });
     }
     // Check duplicate email only (name can be repeated)
     const normalizedEmail = email.trim().toLowerCase();
@@ -260,13 +264,13 @@ router.post('/register', registerRateLimiter, async (req, res) => {
     }
     res.status(500).json({
       message: 'Error registering user',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
 
 // Login endpoint
-router.post('/login', async (req, res) => {
+router.post('/login', authRateLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -304,7 +308,7 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Error logging in', error: error.message });
+    res.status(500).json({ message: 'Error logging in', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -348,7 +352,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching profile', error: error.message });
+    res.status(500).json({ message: 'Error fetching profile', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -364,7 +368,7 @@ router.get('/referrals/me', authenticateToken, async (req, res) => {
     res.json(stats);
   } catch (error) {
     console.error('Error fetching referral stats:', error);
-    res.status(500).json({ message: 'Error fetching referral stats', error: error.message });
+    res.status(500).json({ message: 'Error fetching referral stats', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -401,7 +405,7 @@ router.post('/xp/daily-bonus', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error awarding daily bonus XP:', error);
-    res.status(500).json({ message: 'Error awarding daily bonus XP', error: error.message });
+    res.status(500).json({ message: 'Error awarding daily bonus XP', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -439,7 +443,7 @@ router.post('/sparks/manifest', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error awarding manifest sparks:', error);
-    res.status(500).json({ message: 'Error awarding manifest sparks', error: error.message });
+    res.status(500).json({ message: 'Error awarding manifest sparks', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -531,12 +535,12 @@ router.post('/sparks/freeze-day', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error freezing day:', error);
-    res.status(500).json({ message: 'Error freezing day', error: error.message });
+    res.status(500).json({ message: 'Error freezing day', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Forgot password endpoint
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', authRateLimiter, async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) {
@@ -551,11 +555,11 @@ router.post('/forgot-password', async (req, res) => {
       // Don't reveal if user exists or not for security
       return res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
     }
-    // Generate reset token
-    const crypto = require('crypto');
+    // Generate reset token. The raw token is emailed to the user; only its
+    // hash is persisted, so a DB/backup leak does not expose usable tokens.
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetTokenExpiry = Date.now() + 3600000; // 1 hour from now
-    user.resetPasswordToken = resetToken;
+    user.resetPasswordToken = hashResetToken(resetToken);
     user.resetPasswordExpires = new Date(resetTokenExpiry);
     await user.save();
     
@@ -575,22 +579,24 @@ router.post('/forgot-password', async (req, res) => {
     res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
   } catch (error) {
     console.error('Forgot password error:', error);
-    res.status(500).json({ message: 'Error processing forgot password request', error: error.message });
+    res.status(500).json({ message: 'Error processing forgot password request', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Reset password endpoint
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', authRateLimiter, async (req, res) => {
   try {
     const { token, password } = req.body;
-    if (!token || !password) {
+    if (!token || typeof token !== 'string' || !password) {
       return res.status(400).json({ message: 'Token and password are required' });
     }
     if (typeof password !== 'string' || password.length < 6) {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
     }
+    // Cast to string + look up by hash: prevents NoSQL operator injection
+    // (e.g. { $ne: null }) and matches the hashed token stored at rest.
     const user = await User.findOne({
-      resetPasswordToken: token,
+      resetPasswordToken: hashResetToken(token),
       resetPasswordExpires: { $gt: Date.now() }
     });
     if (!user) {
@@ -616,7 +622,7 @@ router.post('/reset-password', async (req, res) => {
     res.json({ message: 'Password has been reset successfully' });
   } catch (error) {
     console.error('Reset password error:', error);
-    res.status(500).json({ message: 'Error resetting password', error: error.message });
+    res.status(500).json({ message: 'Error resetting password', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -648,8 +654,8 @@ router.put('/profile', authenticateToken, async (req, res) => {
     }
 
     if (avatarUrl !== undefined) {
-      if (avatarUrl && typeof avatarUrl !== 'string') {
-        return res.status(400).json({ message: 'Avatar URL must be a string' });
+      if (!isSafeAvatarUrl(avatarUrl)) {
+        return res.status(400).json({ message: 'Invalid avatar URL' });
       }
       updates.avatarUrl = avatarUrl;
     }
@@ -674,7 +680,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Profile update error:', error);
-    res.status(500).json({ message: 'Error updating profile', error: error.message });
+    res.status(500).json({ message: 'Error updating profile', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -692,7 +698,7 @@ router.get('/weekly-chronicle-settings', authenticateToken, async (req, res) => 
     });
   } catch (error) {
     console.error('Error getting weekly chronicle settings:', error);
-    res.status(500).json({ message: 'Error getting weekly chronicle settings', error: error.message });
+    res.status(500).json({ message: 'Error getting weekly chronicle settings', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -731,7 +737,7 @@ router.put('/weekly-chronicle-settings', authenticateToken, async (req, res) => 
     });
   } catch (error) {
     console.error('Error updating weekly chronicle settings:', error);
-    res.status(500).json({ message: 'Error updating weekly chronicle settings', error: error.message });
+    res.status(500).json({ message: 'Error updating weekly chronicle settings', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -758,7 +764,7 @@ router.put('/preferred-language', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating preferred language:', error);
-    res.status(500).json({ message: 'Error updating preferred language', error: error.message });
+    res.status(500).json({ message: 'Error updating preferred language', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -793,7 +799,7 @@ router.post('/weekly-chronicle-settings/send-test', authenticateToken, async (re
     });
   } catch (error) {
     console.error('Error sending weekly chronicle test email:', error);
-    res.status(500).json({ message: 'Error sending weekly chronicle test email', error: error.message });
+    res.status(500).json({ message: 'Error sending weekly chronicle test email', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -830,7 +836,7 @@ router.post('/reactivation-email/send-test', authenticateToken, async (req, res)
     });
   } catch (error) {
     console.error('Error sending reactivation test email:', error);
-    res.status(500).json({ message: 'Error sending reactivation test email', error: error.message });
+    res.status(500).json({ message: 'Error sending reactivation test email', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -861,7 +867,7 @@ router.get('/daily-checklist/today', authenticateToken, async (req, res) => {
     }
     } catch (error) {
     console.error('Error fetching today\'s checklist:', error);
-    res.status(500).json({ message: 'Error fetching checklist', error: error.message });
+    res.status(500).json({ message: 'Error fetching checklist', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1013,7 +1019,7 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating checklist:', error);
-    res.status(500).json({ message: 'Error updating checklist', error: error.message });
+    res.status(500).json({ message: 'Error updating checklist', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1032,7 +1038,7 @@ router.get('/daily-checklist/history', authenticateToken, async (req, res) => {
     res.json({ checklists: grouped });
   } catch (error) {
     console.error('Error fetching checklist history:', error);
-    res.status(500).json({ message: 'Error fetching checklist history', error: error.message });
+    res.status(500).json({ message: 'Error fetching checklist history', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
     }
 });
 
@@ -1063,7 +1069,7 @@ router.get('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
     }
   } catch (error) {
     console.error('Error fetching tomorrow\'s checklist:', error);
-    res.status(500).json({ message: 'Error fetching checklist', error: error.message });
+    res.status(500).json({ message: 'Error fetching checklist', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1106,7 +1112,7 @@ router.put('/daily-checklist/tomorrow', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating tomorrow\'s checklist:', error);
-    res.status(500).json({ message: 'Error updating checklist', error: error.message });
+    res.status(500).json({ message: 'Error updating checklist', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 

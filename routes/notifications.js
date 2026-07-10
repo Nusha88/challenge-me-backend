@@ -47,7 +47,7 @@ router.get('/:userId', authenticateToken, async (req, res) => {
 
     res.json({ notifications });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching notifications', error: error.message });
+    res.status(500).json({ message: 'Error fetching notifications', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -65,7 +65,7 @@ router.get('/:userId/unread-count', authenticateToken, async (req, res) => {
     const count = await Notification.countDocuments({ userId: normalizedUserId, read: false });
     res.json({ count });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching unread count', error: error.message });
+    res.status(500).json({ message: 'Error fetching unread count', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -88,7 +88,7 @@ router.put('/:id/read', authenticateToken, async (req, res) => {
 
     res.json({ message: 'Notification marked as read', notification });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating notification', error: error.message });
+    res.status(500).json({ message: 'Error updating notification', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -110,7 +110,7 @@ router.put('/:userId/read-all', authenticateToken, async (req, res) => {
 
     res.json({ message: 'All notifications marked as read', updatedCount: result.modifiedCount });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating notifications', error: error.message });
+    res.status(500).json({ message: 'Error updating notifications', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -132,7 +132,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 
     res.json({ message: 'Notification deleted successfully' });
   } catch (error) {
-    res.status(500).json({ message: 'Error deleting notification', error: error.message });
+    res.status(500).json({ message: 'Error deleting notification', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
