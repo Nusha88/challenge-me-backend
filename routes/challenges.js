@@ -334,7 +334,7 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // Update challenge actions progress (Result Challenges)
-router.patch('/:id/actions', async (req, res) => {
+router.patch('/:id/actions', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { actions } = req.body;
@@ -352,10 +352,7 @@ router.patch('/:id/actions', async (req, res) => {
       return res.status(400).json({ message: 'This route is only for result or habit challenges' });
     }
 
-    const authUserId = decodeOptionalAuthUserId(req);
-    if (!authUserId) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUserId = req.user.id;
 
     // Security check: only owner can update progress of result challenge
     const ownerId = challenge.owner?._id || challenge.owner;
@@ -455,7 +452,7 @@ router.patch('/:id/actions', async (req, res) => {
 });
 
 // Complete a single quest (result) action, optionally with a diary report
-router.post('/:id/actions/:actionId/complete', async (req, res) => {
+router.post('/:id/actions/:actionId/complete', authenticateToken, async (req, res) => {
   try {
     const { id, actionId } = req.params;
     const { mode = 'check', text, imageUrl, shareToCommunity } = req.body;
@@ -481,10 +478,7 @@ router.post('/:id/actions/:actionId/complete', async (req, res) => {
       return res.status(400).json({ message: 'This route is only for result challenges' });
     }
 
-    const authUserId = decodeOptionalAuthUserId(req);
-    if (!authUserId) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUserId = req.user.id;
 
     const ownerId = challenge.owner?._id || challenge.owner;
     if (authUserId.toString() !== ownerId.toString()) {
@@ -622,7 +616,7 @@ router.post('/:id/actions/:actionId/complete', async (req, res) => {
   }
 });
 
-router.post('/:id/end-result-mission', async (req, res) => {
+router.post('/:id/end-result-mission', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -639,10 +633,7 @@ router.post('/:id/end-result-mission', async (req, res) => {
       return res.status(400).json({ message: 'This route is only for result challenges' });
     }
 
-    const authUserId = decodeOptionalAuthUserId(req);
-    if (!authUserId) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUserId = req.user.id;
 
     const ownerId = challenge.owner?._id || challenge.owner;
     if (authUserId.toString() !== ownerId.toString()) {
@@ -671,7 +662,7 @@ router.post('/:id/end-result-mission', async (req, res) => {
   }
 });
 
-router.post('/:id/end-habit-mission', async (req, res) => {
+router.post('/:id/end-habit-mission', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     let { completedDays } = req.body;
@@ -697,10 +688,7 @@ router.post('/:id/end-habit-mission', async (req, res) => {
       return res.status(400).json({ message: 'This route is only for habit challenges' });
     }
 
-    const authUserId = decodeOptionalAuthUserId(req);
-    if (!authUserId) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUserId = req.user.id;
 
     const participantIndex = challenge.participants.findIndex(
       (p) => p.userId && p.userId.toString() === authUserId.toString()
@@ -814,7 +802,7 @@ router.post('/:id/end-habit-mission', async (req, res) => {
   }
 });
 
-router.post('/:id/continue-solo', async (req, res) => {
+router.post('/:id/continue-solo', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { customEndDate } = req.body || {};
@@ -823,10 +811,7 @@ router.post('/:id/continue-solo', async (req, res) => {
       return res.status(400).json({ message: 'Invalid challenge id' });
     }
 
-    const authUserId = decodeOptionalAuthUserId(req);
-    if (!authUserId) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUserId = req.user.id;
 
     const sourceChallenge = await Challenge.findById(id);
     if (!sourceChallenge) {
@@ -912,7 +897,7 @@ router.post('/:id/continue-solo', async (req, res) => {
 });
 
 // Update challenge
-router.put('/:id', async (req, res) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, completedDays, allowComments, difficulty, reward } = req.body;
@@ -928,8 +913,8 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    const authUserId = decodeOptionalAuthUserId(req);
-    const isAdmin = false; 
+    const authUserId = req.user.id;
+    const isAdmin = false;
 
     // Security check: only owner can update challenge details
     const ownerId = existingChallenge.owner?._id || existingChallenge.owner;
@@ -1092,28 +1077,27 @@ router.post('/:id/join', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Only habit challenges can be joined' });
     }
 
-    // Check if user is already a participant
-    const existingParticipant = challenge.participants.find(
-      p => p.userId && p.userId.toString() === userId.toString()
+    // Atomic add: the $ne guard in the filter makes concurrent joins for the
+    // same user match at most once, so no duplicate participants can appear.
+    const { startUtc: joinDate } = getClientDayRange(req, 0);
+    const updatedChallenge = await Challenge.findOneAndUpdate(
+      { _id: id, 'participants.userId': { $ne: userId } },
+      { $push: { participants: { userId, completedDays: [], joinedAt: joinDate } } },
+      { new: true }
     );
-    
-    if (existingParticipant) {
+
+    if (!updatedChallenge) {
       return res.status(400).json({ message: 'You have already joined this challenge' });
     }
 
-    // Add new participant with empty completedDays array
-    const { startUtc: joinDate } = getClientDayRange(req, 0);
-    challenge.participants.push({ userId, completedDays: [], joinedAt: joinDate });
-    await challenge.save();
-
-    const ownerId = challenge.owner?._id || challenge.owner;
-    await notifyChallengeJoin({ ownerId, fromUserId: userId, challenge });
+    const ownerId = updatedChallenge.owner?._id || updatedChallenge.owner;
+    await notifyChallengeJoin({ ownerId, fromUserId: userId, challenge: updatedChallenge });
 
     const welcomeBonusPayload = await getWelcomeBonusRewardPayload(userId, serializeUserForClient);
 
     res.json({
       message: 'Successfully joined the challenge',
-      challenge,
+      challenge: updatedChallenge,
       ...welcomeBonusPayload
     });
   } catch (error) {
@@ -1163,14 +1147,10 @@ router.post('/:id/leave', authenticateToken, async (req, res) => {
 });
 
 // Extend a finished challenge for sparks
-router.post('/:id/extend', async (req, res) => {
+router.post('/:id/extend', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const authUserId = decodeOptionalAuthUserId(req);
-
-    if (!authUserId) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUserId = req.user.id;
 
     const challenge = await Challenge.findById(id);
 
@@ -1255,14 +1235,10 @@ router.post('/:id/extend', async (req, res) => {
 });
 
 // Second chance: mark today as protected completion for sparks (habit only)
-router.post('/:id/second-chance', async (req, res) => {
+router.post('/:id/second-chance', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const authUserId = decodeOptionalAuthUserId(req);
-
-    if (!authUserId) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUserId = req.user.id;
 
     const challenge = await Challenge.findById(id);
 
@@ -1589,7 +1565,7 @@ router.get('/main-ritual', async (req, res) => {
 });
 
 // Update participant's completedDays (HABIT CHALLENGE ONLY)
-router.put('/:id/participant/:userId/completedDays', async (req, res) => {
+router.put('/:id/participant/:userId/completedDays', authenticateToken, async (req, res) => {
   try {
     const { id, userId } = req.params;
     let { completedDays } = req.body;
@@ -1622,13 +1598,37 @@ router.put('/:id/participant/:userId/completedDays', async (req, res) => {
       return res.status(404).json({ message: 'Participant not found in this challenge' });
     }
 
-    const authUserId = decodeOptionalAuthUserId(req);
+    const authUserId = req.user.id;
     // Security: Only the user themselves can update their progress
-    if (!authUserId || authUserId.toString() !== userId.toString()) {
+    if (authUserId.toString() !== userId.toString()) {
       return res.status(403).json({ message: 'You are not authorized to update this progress' });
     }
 
     const prevParticipant = challenge.participants[participantIndex];
+
+    // Reject days outside the participant's allowed window: nothing before the
+    // challenge start, nothing after today (client day), and nothing past the
+    // later of the challenge end / the participant's solo-continuation end.
+    // Prevents farming XP/sparks by submitting arbitrary dates.
+    const { clientDayStr: todayKey } = getClientDayRange(req, 0);
+    const startKey = normalizeDateLikeToYmd(challenge.startDate);
+    const challengeEndKey = normalizeDateLikeToYmd(challenge.endDate);
+    const soloEndKey = normalizeDateLikeToYmd(
+      getSoloContinuationDates(challenge, prevParticipant)?.endDate
+    );
+    const endKey = [challengeEndKey, soloEndKey].filter(Boolean).sort().pop() || null;
+
+    const invalidDays = completedDays.filter((day) =>
+      (startKey && day < startKey) ||
+      (endKey && day > endKey) ||
+      (todayKey && day > todayKey)
+    );
+    if (invalidDays.length > 0) {
+      return res.status(400).json({
+        message: 'completedDays contains dates outside the challenge window or in the future',
+        invalidDays
+      });
+    }
     const prevCompletedDays = Array.isArray(prevParticipant.completedDays)
       ? prevParticipant.completedDays
       : [];
@@ -2052,6 +2052,8 @@ router.post('/:id/comments', authenticateToken, async (req, res) => {
 });
 
 // Get comments for a challenge
+const COMMENTS_PAGE_MAX = 100;
+
 router.get('/:id/comments', async (req, res) => {
   try {
     const challenge = await Challenge.findById(req.params.id)
@@ -2059,43 +2061,63 @@ router.get('/:id/comments', async (req, res) => {
       .populate('comments.replies.userId', 'name avatarUrl')
       .populate('comments.replies.mentionedUserId', 'name avatarUrl')
       .select('comments allowComments');
-    
+
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    // Manually populate nested replies (replies to replies) since Mongoose doesn't support deep nested populate
-    const User = require('../models/User');
-    for (const comment of challenge.comments) {
-      if (comment.replies && comment.replies.length > 0) {
-        for (const reply of comment.replies) {
-          if (reply.replies && reply.replies.length > 0) {
-            for (const nestedReply of reply.replies) {
-              // Populate userId for nested replies
-              if (nestedReply.userId && !nestedReply.userId.name) {
-                const userId = nestedReply.userId._id || nestedReply.userId;
-                const user = await User.findById(userId).select('name avatarUrl');
-                if (user) {
-                  nestedReply.userId = user;
-                }
-              }
-              // Populate mentionedUserId for nested replies
-              if (nestedReply.mentionedUserId && !nestedReply.mentionedUserId.name) {
-                const mentionedUserId = nestedReply.mentionedUserId._id || nestedReply.mentionedUserId;
-                const mentionedUser = await User.findById(mentionedUserId).select('name avatarUrl');
-                if (mentionedUser) {
-                  nestedReply.mentionedUserId = mentionedUser;
-                }
-              }
+    // Paginate over the embedded array so huge threads don't ship whole.
+    // offset counts back from the newest comment (offset=0 → latest page);
+    // chronological order is preserved within the page.
+    const allComments = challenge.comments || [];
+    const total = allComments.length;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || COMMENTS_PAGE_MAX, 1), COMMENTS_PAGE_MAX);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const end = Math.max(0, total - offset);
+    const start = Math.max(0, end - limit);
+    const comments = allComments.slice(start, end);
+
+    // Populate nested replies (replies to replies) in one batched query —
+    // Mongoose doesn't support deep nested populate, and per-reply findById
+    // calls were an N+1.
+    const unresolvedIds = new Set();
+    for (const comment of comments) {
+      for (const reply of comment.replies || []) {
+        for (const nestedReply of reply.replies || []) {
+          if (nestedReply.userId && !nestedReply.userId.name) {
+            unresolvedIds.add(String(nestedReply.userId._id || nestedReply.userId));
+          }
+          if (nestedReply.mentionedUserId && !nestedReply.mentionedUserId.name) {
+            unresolvedIds.add(String(nestedReply.mentionedUserId._id || nestedReply.mentionedUserId));
+          }
+        }
+      }
+    }
+
+    if (unresolvedIds.size > 0) {
+      const users = await User.find({ _id: { $in: [...unresolvedIds] } }).select('name avatarUrl');
+      const usersById = new Map(users.map((u) => [String(u._id), u]));
+      for (const comment of comments) {
+        for (const reply of comment.replies || []) {
+          for (const nestedReply of reply.replies || []) {
+            if (nestedReply.userId && !nestedReply.userId.name) {
+              const resolved = usersById.get(String(nestedReply.userId._id || nestedReply.userId));
+              if (resolved) nestedReply.userId = resolved;
+            }
+            if (nestedReply.mentionedUserId && !nestedReply.mentionedUserId.name) {
+              const resolved = usersById.get(String(nestedReply.mentionedUserId._id || nestedReply.mentionedUserId));
+              if (resolved) nestedReply.mentionedUserId = resolved;
             }
           }
         }
       }
     }
 
-    res.json({ 
-      comments: challenge.comments || [],
-      allowComments: challenge.allowComments 
+    res.json({
+      comments,
+      allowComments: challenge.allowComments,
+      total,
+      hasMore: start > 0
     });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching comments', error: process.env.NODE_ENV === 'development' ? error.message : undefined });

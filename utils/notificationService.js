@@ -16,8 +16,9 @@ async function createNotificationWithPush({
     ...notificationFields
   });
 
+  let pushResult = null;
   if (push) {
-    await sendPushNotification(userId, {
+    pushResult = await sendPushNotification(userId, {
       title: push.title,
       body: push.body,
       tag: push.tag,
@@ -29,7 +30,7 @@ async function createNotificationWithPush({
     });
   }
 
-  return notification;
+  return { notification, pushResult };
 }
 
 /** In-app + push notification for diary activity (owner comment or @mention in reply). */
@@ -144,7 +145,7 @@ async function notifyChallengeWatch({ ownerId, fromUserId, challenge }) {
 async function sendDailyRecapNotification(user, localDate) {
   const { title, body } = getLocalizedDailyRecap(user.dailyRecapLanguage);
 
-  await createNotificationWithPush({
+  const { notification, pushResult } = await createNotificationWithPush({
     userId: user._id,
     type: 'daily_recap',
     notificationFields: {
@@ -162,6 +163,15 @@ async function sendDailyRecapNotification(user, localDate) {
       }
     }
   });
+
+  // Transient push failure → throw so the scheduler does NOT mark the recap
+  // as sent and retries on the next tick. Permanent failures (subscription
+  // gone/pruned) are not retryable, so we let the marker advance. The in-app
+  // row is removed first so the retry doesn't create duplicates.
+  if (pushResult && !pushResult.delivered && !pushResult.permanent) {
+    await Notification.deleteOne({ _id: notification._id }).catch(() => {});
+    throw new Error(`Daily recap push failed transiently (${pushResult.reason})`);
+  }
 }
 
 async function notifyReferralCompleted({ referrerId, refereeId, refereeName }) {

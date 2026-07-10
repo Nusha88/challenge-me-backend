@@ -60,6 +60,8 @@ async function awardSparksOnce(userId, eventKey, amount, meta = {}) {
   };
 }
 
+const CAPPED_AWARD_MAX_RETRIES = 3;
+
 async function awardCappedSparksOnce(userId, eventKey, amount, localDate, meta = {}) {
   if (!userId || !eventKey || !amount || amount <= 0 || !localDate) {
     return {
@@ -69,71 +71,89 @@ async function awardCappedSparksOnce(userId, eventKey, amount, localDate, meta =
     };
   }
 
-  const user = await User.findById(userId);
-  if (!user) {
-    return {
-      awarded: false,
-      sparksGained: 0,
-      reason: 'user_not_found'
-    };
-  }
+  // Compare-and-swap: the cap state we read is asserted in the update filter,
+  // so a concurrent award invalidates the write and we retry with fresh state.
+  // This closes the race where parallel requests could jointly exceed the cap.
+  for (let attempt = 0; attempt < CAPPED_AWARD_MAX_RETRIES; attempt++) {
+    const user = await User.findById(userId).select('awardedSparksEventKeys sparksDailyCap');
+    if (!user) {
+      return {
+        awarded: false,
+        sparksGained: 0,
+        reason: 'user_not_found'
+      };
+    }
 
-  if ((user.awardedSparksEventKeys || []).includes(eventKey)) {
-    return {
-      awarded: false,
-      sparksGained: 0,
-      reason: 'already_awarded'
-    };
-  }
+    if ((user.awardedSparksEventKeys || []).includes(eventKey)) {
+      return {
+        awarded: false,
+        sparksGained: 0,
+        reason: 'already_awarded'
+      };
+    }
 
-  const dailyAmount = getDailyCapState(user, localDate);
-  if (dailyAmount >= DAILY_SPARKS_CAP) {
-    return {
-      awarded: false,
-      sparksGained: 0,
-      reason: 'daily_cap_reached'
-    };
-  }
+    const capIsForToday = user.sparksDailyCap?.clientDay === localDate;
+    const dailyAmount = getDailyCapState(user, localDate);
+    if (dailyAmount >= DAILY_SPARKS_CAP) {
+      return {
+        awarded: false,
+        sparksGained: 0,
+        reason: 'daily_cap_reached'
+      };
+    }
 
-  const sparksToAward = Math.min(amount, DAILY_SPARKS_CAP - dailyAmount);
-  if (sparksToAward <= 0) {
-    return {
-      awarded: false,
-      sparksGained: 0,
-      reason: 'daily_cap_reached'
-    };
-  }
+    const sparksToAward = Math.min(amount, DAILY_SPARKS_CAP - dailyAmount);
+    if (sparksToAward <= 0) {
+      return {
+        awarded: false,
+        sparksGained: 0,
+        reason: 'daily_cap_reached'
+      };
+    }
 
-  const updatedUser = await User.findOneAndUpdate(
-    {
-      _id: userId,
-      awardedSparksEventKeys: { $ne: eventKey }
-    },
-    {
-      $inc: { sparks: sparksToAward },
-      $addToSet: { awardedSparksEventKeys: eventKey },
-      $set: {
-        'sparksDailyCap.clientDay': localDate,
-        'sparksDailyCap.amount': dailyAmount + sparksToAward
-      }
-    },
-    { new: true }
-  );
+    const capStateFilter = capIsForToday
+      ? {
+          'sparksDailyCap.clientDay': localDate,
+          'sparksDailyCap.amount': dailyAmount
+        }
+      : {
+          'sparksDailyCap.clientDay': { $ne: localDate }
+        };
 
-  if (!updatedUser) {
-    return {
-      awarded: false,
-      sparksGained: 0,
-      reason: 'already_awarded'
-    };
+    const updatedUser = await User.findOneAndUpdate(
+      {
+        _id: userId,
+        awardedSparksEventKeys: { $ne: eventKey },
+        ...capStateFilter
+      },
+      {
+        $inc: { sparks: sparksToAward },
+        $addToSet: { awardedSparksEventKeys: eventKey },
+        $set: {
+          'sparksDailyCap.clientDay': localDate,
+          'sparksDailyCap.amount': dailyAmount + sparksToAward
+        }
+      },
+      { new: true }
+    );
+
+    if (updatedUser) {
+      return {
+        awarded: true,
+        sparksGained: sparksToAward,
+        eventKey,
+        user: updatedUser,
+        meta
+      };
+    }
+    // Filter missed: either the event key landed concurrently or the cap
+    // state moved under us — loop re-reads and re-classifies.
   }
 
   return {
-    awarded: true,
-    sparksGained: sparksToAward,
-    eventKey,
-    user: updatedUser,
-    meta
+    awarded: false,
+    sparksGained: 0,
+    reason: 'concurrent_update_conflict'
   };
 }
 

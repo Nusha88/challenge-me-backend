@@ -147,13 +147,16 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
  * Send push notification to a user
  * @param {String} userId - User ID to send notification to
  * @param {Object} notificationData - Notification payload
- * @returns {Promise<void>}
+ * @returns {Promise<{delivered: boolean, permanent: boolean, reason: string|null}>}
+ *   `permanent: true` means retrying will not help (no subscription, subscription
+ *   pruned, keys misconfigured); `permanent: false` means a transient failure
+ *   (network / 5xx) that callers may retry.
  */
 async function sendPushNotification(userId, notificationData) {
   try {
     // Check if VAPID keys are configured
     if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-      return;
+      return { delivered: false, permanent: true, reason: 'vapid_not_configured' };
     }
 
     // Ensure VAPID keys are set (in case module was reloaded or keys changed)
@@ -164,9 +167,9 @@ async function sendPushNotification(userId, notificationData) {
     );
 
     const user = await User.findById(userId);
-    
+
     if (!user || !user.pushSubscription) {
-      return;
+      return { delivered: false, permanent: true, reason: 'no_subscription' };
     }
 
     const payload = JSON.stringify({
@@ -181,19 +184,28 @@ async function sendPushNotification(userId, notificationData) {
     });
 
     await webpush.sendNotification(user.pushSubscription, payload);
+    return { delivered: true, permanent: false, reason: null };
   } catch (error) {
     console.error(`[Push] Error sending push notification to user ${userId}:`, error);
-    
-    // If subscription is invalid or VAPID keys don't match, remove it
-    if (error.statusCode === 410 || error.statusCode === 404 || error.statusCode === 403) {
-      if (error.statusCode === 403) {
-        const body = typeof error.body === 'string' ? error.body : ''
-        if (body.includes('BadJwtToken') || body.includes('credentials') || body.includes('VAPID')) {
-          console.warn(`[Push] 403 likely due to VAPID mismatch/rotation for user ${userId}. Removing stored subscription.`)
-        }
+
+    // Prune the subscription only on failures that cannot recover:
+    // 404/410 mean the subscription is gone; a 403 is pruned only when the
+    // body points at a VAPID key mismatch (rotation), since other 403s and
+    // all 5xx/network errors are transient and the subscription is still good.
+    const isGone = error.statusCode === 410 || error.statusCode === 404;
+    const body = typeof error.body === 'string' ? error.body : ''
+    const isVapidMismatch = error.statusCode === 403 &&
+      (body.includes('BadJwtToken') || body.includes('credentials') || body.includes('VAPID'));
+
+    if (isGone || isVapidMismatch) {
+      if (isVapidMismatch) {
+        console.warn(`[Push] 403 likely due to VAPID mismatch/rotation for user ${userId}. Removing stored subscription.`)
       }
       await User.findByIdAndUpdate(userId, { pushSubscription: null });
+      return { delivered: false, permanent: true, reason: isGone ? 'subscription_gone' : 'vapid_mismatch' };
     }
+
+    return { delivered: false, permanent: false, reason: 'transient_send_failure' };
   }
 }
 
