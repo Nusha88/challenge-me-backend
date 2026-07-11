@@ -5,6 +5,11 @@ const authenticateToken = require('../middleware/authenticateToken');
 const IMGBB_API_KEY = process.env.IMGBB_API_KEY;
 const IMGBB_UPLOAD_URL = 'https://api.imgbb.com/1/upload';
 
+if (!IMGBB_API_KEY) {
+  console.warn('[Uploads] IMGBB_API_KEY is not set — POST /api/uploads/image will return 503.');
+  console.warn('[Uploads] Get a free key at https://api.imgbb.com/ and add it to .env');
+}
+
 // Max base64 payload (~13MB base64 ≈ ~9MB source image). The client caps images
 // at 5MB, so this is a comfortable server-side ceiling.
 const MAX_BASE64_LENGTH = 13 * 1024 * 1024;
@@ -20,7 +25,9 @@ router.post(
   async (req, res) => {
     try {
       if (!IMGBB_API_KEY) {
-        return res.status(503).json({ message: 'Image uploads are not configured' });
+        return res.status(503).json({
+          message: 'Image uploads are not configured. Set IMGBB_API_KEY in the server environment.'
+        });
       }
 
       const { image } = req.body || {};

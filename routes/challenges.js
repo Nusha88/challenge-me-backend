@@ -519,6 +519,7 @@ router.post('/:id/actions/:actionId/complete', authenticateToken, async (req, re
           userId: authUserId,
           text: reportText,
           imageUrl: reportImage,
+          actionTitle: action.text || '',
           createdAt: new Date()
         });
       }
@@ -1095,9 +1096,13 @@ router.post('/:id/join', authenticateToken, async (req, res) => {
 
     const welcomeBonusPayload = await getWelcomeBonusRewardPayload(userId, serializeUserForClient);
 
+    const populatedChallenge = await Challenge.findById(updatedChallenge._id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl');
+
     res.json({
       message: 'Successfully joined the challenge',
-      challenge: updatedChallenge,
+      challenge: populatedChallenge,
       ...welcomeBonusPayload
     });
   } catch (error) {
@@ -1111,28 +1116,26 @@ router.post('/:id/leave', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    const challenge = await Challenge.findById(id)
-      .populate('owner', 'name avatarUrl')
-      .populate('participants.userId', 'name avatarUrl');
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid challenge id' });
+    }
 
-    if (!challenge) {
+    const challengeExists = await Challenge.exists({ _id: id });
+    if (!challengeExists) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    // Check if user is a participant
-    const participantIndex = challenge.participants.findIndex(
-      p => (p.userId?._id || p.userId || p._id || p).toString() === userId.toString()
+    // Use $pull instead of load/splice/save so legacy participant rows with
+    // missing userId values do not block leaving for valid participants.
+    const leaveResult = await Challenge.updateOne(
+      { _id: id, 'participants.userId': userId },
+      { $pull: { participants: { userId } } }
     );
 
-    if (participantIndex === -1) {
+    if (leaveResult.modifiedCount === 0) {
       return res.status(400).json({ message: 'You are not a participant of this challenge' });
     }
 
-    // Remove participant
-    challenge.participants.splice(participantIndex, 1);
-    await challenge.save();
-
-    // Refresh challenge data
     const updatedChallenge = await Challenge.findById(id)
       .populate('owner', 'name avatarUrl')
       .populate('participants.userId', 'name avatarUrl');
@@ -1142,6 +1145,7 @@ router.post('/:id/leave', authenticateToken, async (req, res) => {
       challenge: updatedChallenge
     });
   } catch (error) {
+    console.error('Error leaving challenge:', error);
     res.status(500).json({ message: 'Error leaving challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
@@ -2297,6 +2301,7 @@ router.post('/:id/diary', authenticateToken, async (req, res) => {
         text: entryData.text,
         imageUrl: entryData.imageUrl,
         isTriumph: triumphEntry,
+        actionTitle: entryData.actionTitle || '',
         createdAt: new Date()
       });
     }

@@ -97,7 +97,7 @@ async function processUserWeeklyChronicle(user, now) {
   if (user.weeklyChronicleLastSentWeekKey === weekKey) return;
 
   const report = await buildWeeklyChronicleReport(user, now);
-  await sendWeeklyChronicleEmail(user.email, report);
+  await sendWeeklyChronicleEmail(user.email, report, user._id);
 
   user.weeklyChronicleLastSentWeekKey = weekKey;
   await user.save();

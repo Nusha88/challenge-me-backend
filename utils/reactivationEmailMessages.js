@@ -6,7 +6,8 @@ const REACTIVATION_MESSAGES = {
     bodyText: 'Your legend is on pause, but it is never lost. Even heroes need rest — what matters is the moment you choose to return. Your rituals are waiting quietly, ready whenever you are.',
     sparksNotice: 'You still have {{sparksBalance}} Sparks glowing in your account. They are proof of the path you have already walked.',
     ctaButton: 'REIGNITE YOUR FLAME',
-    footer: '© {{year}} Ignite. You received this because we noticed a short pause in your ritual journey. We will only send this reminder once for this pause.'
+    footer: '© {{year}} Ignite. You received this because we noticed a short pause in your ritual journey. We will only send this reminder once for this pause.',
+    unsubscribe: 'Unsubscribe from these reminders'
   },
   ru: {
     subject: '🌌 Твоё пламя угасает... Нам не хватает тебя в Ignite',
@@ -15,7 +16,8 @@ const REACTIVATION_MESSAGES = {
     bodyText: 'Твоя легенда на паузе, но она не исчезла. Даже героям нужен отдых — важен момент, когда ты решаешь вернуться. Твои ритуалы ждут тебя и готовы продолжиться, когда ты будешь готов.',
     sparksNotice: 'У тебя всё ещё {{sparksBalance}} Искр на счету. Это знак пути, который ты уже прошёл.',
     ctaButton: 'РАЗЖЕЧЬ ПЛАМЯ СНОВА',
-    footer: '© {{year}} Ignite. Вы получили это письмо, потому что мы заметили короткую паузу в ваших ритуалах. Такое напоминание отправляется только один раз за эту паузу.'
+    footer: '© {{year}} Ignite. Вы получили это письмо, потому что мы заметили короткую паузу в ваших ритуалах. Такое напоминание отправляется только один раз за эту паузу.',
+    unsubscribe: 'Отписаться от этих напоминаний'
   }
 };
 
@@ -65,7 +67,8 @@ function getReactivationEmailContent({
   language,
   appUrl,
   logoUrl,
-  year
+  year,
+  unsubscribeUrl
 }) {
   const lang = resolveLanguage(language);
   const strings = REACTIVATION_MESSAGES[lang];
@@ -88,6 +91,9 @@ function getReactivationEmailContent({
   const ctaButton = strings.ctaButton;
   const footer = interpolate(strings.footer, vars);
   const preheader = interpolate(strings.preheader, vars);
+  const unsubscribeLink = unsubscribeUrl
+    ? `<br><a href="${escapeHtml(unsubscribeUrl)}" style="color:${COLORS.textDim}; text-decoration:underline;">${strings.unsubscribe}</a>`
+    : '';
 
   const html = `
 <!DOCTYPE html>
@@ -156,7 +162,7 @@ function getReactivationEmailContent({
           </tr>
           <tr>
             <td style="padding:18px 8px 0; font-family:Arial, Helvetica, sans-serif; font-size:11px; line-height:1.6; color:${COLORS.textDim}; text-align:center;">
-              ${footer}
+              ${footer}${unsubscribeLink}
             </td>
           </tr>
         </table>
@@ -176,8 +182,9 @@ function getReactivationEmailContent({
     '',
     `${ctaButton}: ${loginUrl}`,
     '',
-    footer
-  ].join('\n');
+    footer,
+    unsubscribeUrl ? `${strings.unsubscribe}: ${unsubscribeUrl}` : null
+  ].filter(Boolean).join('\n');
 
   return { subject, html, text };
 }

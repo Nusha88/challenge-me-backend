@@ -348,7 +348,7 @@ function buildQuestsFullWidthSection(questHtml, strings) {
   `;
 }
 
-function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl } = {}) {
+function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl, unsubscribeUrl } = {}) {
   const language = resolveLanguage(report?.language);
   const userName = escapeHtml(report?.userName || 'Hero');
   const weekRange = formatWeekRange(report.weekStart, report.weekEnd, language);
@@ -371,7 +371,8 @@ function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl } = {}) 
       rankTitle: 'Ранг',
       rankLevelLabel: 'Ваш уровень',
       cta: 'Открыть Ignite',
-      footer: `© ${copyrightYear} Ignite. Вы получили это письмо, потому что включили «Еженедельную летопись» в настройках профиля.`
+      footer: `© ${copyrightYear} Ignite. Вы получили это письмо, потому что включили «Еженедельную летопись» в настройках профиля.`,
+      unsubscribe: 'Отписаться от Legend Chronicle'
     }
     : {
       subject: `Legend Chronicle · ${weekRange}`,
@@ -387,8 +388,13 @@ function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl } = {}) 
       rankTitle: 'Rank',
       rankLevelLabel: 'Your level',
       cta: 'Open Ignite',
-      footer: `© ${copyrightYear} Ignite. You received this email because weekly chronicle is enabled in your profile settings.`
+      footer: `© ${copyrightYear} Ignite. You received this email because weekly chronicle is enabled in your profile settings.`,
+      unsubscribe: 'Unsubscribe from Legend Chronicle'
     };
+
+  const unsubscribeBlock = unsubscribeUrl
+    ? `<br><a href="${escapeHtml(unsubscribeUrl)}" style="color:${COLORS.textDim}; text-decoration:underline;">${strings.unsubscribe}</a>`
+    : '';
 
   const questHtml = buildQuestHtml(report.quests, language);
   const questText = buildQuestLines(report.quests, language);
@@ -496,7 +502,7 @@ function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl } = {}) 
 
           <tr>
             <td style="padding:18px 8px 0; font-family:Arial, Helvetica, sans-serif; font-size:11px; line-height:1.6; color:${COLORS.textDim}; text-align:center;">
-              ${strings.footer}
+              ${strings.footer}${unsubscribeBlock}
             </td>
           </tr>
         </table>
@@ -523,8 +529,9 @@ function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl } = {}) 
     '',
     `${strings.cta}: ${loginUrl}`,
     '',
-    strings.footer
-  ].join('\n');
+    strings.footer,
+    unsubscribeUrl ? `${strings.unsubscribe}: ${unsubscribeUrl}` : null
+  ].filter(Boolean).join('\n');
 
   return {
     subject: strings.subject,

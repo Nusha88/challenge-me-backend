@@ -3,6 +3,10 @@ const { getPasswordResetEmailContent, getPasswordResetSuccessEmailContent } = re
 const { getNewUserRegistrationNotifyEmailContent } = require('./registrationNotifyEmailMessages');
 const { getWeeklyChronicleEmailContent } = require('./weeklyChronicleEmailMessages');
 const { getReactivationEmailContent } = require('./reactivationEmailMessages');
+const {
+  buildUnsubscribeUrl,
+  EMAIL_UNSUBSCRIBE_TYPES
+} = require('./emailUnsubscribe');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'Ignite <noreply@ignite-me.app>';
@@ -169,13 +173,25 @@ async function sendNewUserRegistrationNotifyEmail({ userName, userEmail, registe
  * @param {Object} report - Report from buildWeeklyChronicleReport()
  * @returns {Promise<Object>} Resend API response
  */
-async function sendWeeklyChronicleEmail(email, report) {
-  const frontendUrl = process.env.FRONTEND_URL || PRODUCTION_FRONTEND_URL;
+function getEmailFrontendUrl() {
+  return (
+    process.env.EMAIL_FRONTEND_URL ||
+    process.env.FRONTEND_URL ||
+    'https://ignite-me.app'
+  ).replace(/\/$/, '');
+}
+
+async function sendWeeklyChronicleEmail(email, report, userId) {
+  const frontendUrl = getEmailFrontendUrl();
   const logoUrl = process.env.EMAIL_LOGO_URL || `${frontendUrl}/awa.png`;
+  const unsubscribeUrl = userId
+    ? buildUnsubscribeUrl(userId, EMAIL_UNSUBSCRIBE_TYPES.WEEKLY_CHRONICLE, frontendUrl)
+    : null;
   const { subject, html, text } = getWeeklyChronicleEmailContent(report, {
     appUrl: frontendUrl,
     logoUrl,
-    year: new Date().getFullYear()
+    year: new Date().getFullYear(),
+    unsubscribeUrl
   });
 
   try {
@@ -205,15 +221,19 @@ async function sendWeeklyChronicleEmail(email, report) {
  * @param {{ userName?: string, firstName?: string, sparksBalance?: number, language?: string }} payload
  */
 async function sendReactivationEmail(email, payload = {}) {
-  const frontendUrl = process.env.FRONTEND_URL || PRODUCTION_FRONTEND_URL;
+  const frontendUrl = getEmailFrontendUrl();
   const logoUrl = process.env.EMAIL_LOGO_URL || `${frontendUrl}/icons/icon-192.png`;
+  const unsubscribeUrl = payload.userId
+    ? buildUnsubscribeUrl(payload.userId, EMAIL_UNSUBSCRIBE_TYPES.REACTIVATION, frontendUrl)
+    : null;
   const { subject, html, text } = getReactivationEmailContent({
     userName: payload.userName,
     sparksBalance: payload.sparksBalance,
     language: payload.language,
     appUrl: frontendUrl,
     logoUrl,
-    year: new Date().getFullYear()
+    year: new Date().getFullYear(),
+    unsubscribeUrl
   });
 
   try {

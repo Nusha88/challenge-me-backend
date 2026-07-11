@@ -162,6 +162,11 @@ const challengeSchema = new mongoose.Schema(
           type: Boolean,
           default: false
         },
+        actionTitle: {
+          type: String,
+          default: '',
+          trim: true
+        },
         reactions: {
           type: Map,
           of: [{

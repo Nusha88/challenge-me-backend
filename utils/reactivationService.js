@@ -80,6 +80,7 @@ async function loadHabitChallengesForUsers(userIds) {
 function shouldSendReactivationEmail(user, streakKey) {
   if (!streakKey) return false;
   if (!user?.email) return false;
+  if (user.reactivationEmailEnabled === false) return false;
   if (user.reactivationEmailSentStreakKey === streakKey) return false;
 
   return true;
@@ -106,6 +107,7 @@ async function processUserReactivation(user, now, habitChallenges) {
   const sparksBalance = Math.max(0, Number(user.sparks) || 0);
 
   await sendReactivationEmail(user.email, {
+    userId: user._id,
     userName: user.name,
     firstName: getFirstName(user.name),
     sparksBalance,

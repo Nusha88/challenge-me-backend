@@ -139,6 +139,10 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: String,
     default: null
   },
+  reactivationEmailEnabled: {
+    type: Boolean,
+    default: true
+  },
   reactivationEmailSentStreakKey: {
     type: String,
     default: null

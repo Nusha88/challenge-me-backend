@@ -29,8 +29,6 @@ const app = express();
 app.set('trust proxy', 1);
 
 // CORS configuration
-// Local dev origins are only trusted outside production.
-const isProduction = process.env.NODE_ENV === 'production';
 const devOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
@@ -38,11 +36,15 @@ const devOrigins = [
   'http://127.0.0.1:4173',
   'http://localhost:3000'
 ];
-const defaultAllowedOrigins = isProduction
-  ? ['https://ignite-me.app']
-  : [...devOrigins, 'https://ignite-me.app'];
+const localhostOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
-const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || 'https://ignite-me.app')
+function isLocalhostOrigin(origin) {
+  return Boolean(origin && localhostOriginPattern.test(origin));
+}
+
+const defaultAllowedOrigins = ['https://ignite-me.app', ...devOrigins];
+
+const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
   .split(',')
   .map(origin => origin.trim())
   .filter(Boolean);
@@ -51,7 +53,7 @@ const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...envAllow
 
 const corsOptions = {
   origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin || allowedOrigins.includes(origin) || isLocalhostOrigin(origin)) {
       return callback(null, true);
     }
     console.warn(`CORS blocked request from origin: ${origin}`);

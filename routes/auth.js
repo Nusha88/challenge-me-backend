@@ -15,6 +15,11 @@ const crypto = require('crypto');
 const { buildWeeklyChronicleReport, resolveUserReportLanguage } = require('../utils/weeklyChronicleReport');
 const { registerRateLimiter, authRateLimiter } = require('../middleware/registerRateLimiter');
 const authenticateToken = require('../middleware/authenticateToken');
+const {
+  verifyEmailUnsubscribeToken,
+  EMAIL_UNSUBSCRIBE_TYPES
+} = require('../utils/emailUnsubscribe');
+const { renderEmailUnsubscribeHtml } = require('../utils/emailUnsubscribePage');
 
 // Hashes a password-reset token so only its hash is stored at rest.
 function hashResetToken(token) {
@@ -741,6 +746,98 @@ router.put('/weekly-chronicle-settings', authenticateToken, async (req, res) => 
   }
 });
 
+router.get('/email/unsubscribe', async (req, res) => {
+  const wantsHtml = req.query?.format === 'html'
+    || String(req.headers.accept || '').includes('text/html');
+
+  function respondHtml({ language, success, error, statusCode = 200 }) {
+    const profileUrl = `${(process.env.EMAIL_FRONTEND_URL || process.env.FRONTEND_URL || 'https://ignite-me.app').replace(/\/$/, '')}/profile`;
+    res.status(statusCode).type('html').send(renderEmailUnsubscribeHtml({
+      language,
+      success,
+      error,
+      profileUrl
+    }));
+  }
+
+  try {
+    const { token } = req.query || {};
+    const verified = verifyEmailUnsubscribeToken(token);
+
+    if (!verified) {
+      const message = 'Invalid or expired unsubscribe link';
+      if (wantsHtml) {
+        return respondHtml({ language: 'en', error: message, statusCode: 400 });
+      }
+      return res.status(400).json({ message });
+    }
+
+    const user = await User.findById(verified.userId).select(
+      'weeklyChronicleEmailEnabled reactivationEmailEnabled preferredLanguage dailyRecapLanguage'
+    );
+
+    if (!user) {
+      const message = 'User not found';
+      if (wantsHtml) {
+        return respondHtml({ language: 'en', error: message, statusCode: 404 });
+      }
+      return res.status(404).json({ message });
+    }
+
+    if (verified.type === EMAIL_UNSUBSCRIBE_TYPES.WEEKLY_CHRONICLE) {
+      user.weeklyChronicleEmailEnabled = false;
+    } else if (verified.type === EMAIL_UNSUBSCRIBE_TYPES.REACTIVATION) {
+      user.reactivationEmailEnabled = false;
+    } else {
+      const message = 'Unsupported unsubscribe type';
+      if (wantsHtml) {
+        return respondHtml({
+          language: user.preferredLanguage || user.dailyRecapLanguage || 'en',
+          error: message,
+          statusCode: 400
+        });
+      }
+      return res.status(400).json({ message });
+    }
+
+    await user.save();
+
+    const language = user.preferredLanguage || user.dailyRecapLanguage || 'en';
+    const messages = language === 'ru'
+      ? {
+        [EMAIL_UNSUBSCRIBE_TYPES.WEEKLY_CHRONICLE]: 'Вы отписались от еженедельной летописи Legend Chronicle.',
+        [EMAIL_UNSUBSCRIBE_TYPES.REACTIVATION]: 'Вы отписались от напоминаний «Your flame is fading».'
+      }
+      : {
+        [EMAIL_UNSUBSCRIBE_TYPES.WEEKLY_CHRONICLE]: 'You have unsubscribed from Legend Chronicle emails.',
+        [EMAIL_UNSUBSCRIBE_TYPES.REACTIVATION]: 'You have unsubscribed from "Your flame is fading" reminder emails.'
+      };
+
+    const message = messages[verified.type];
+
+    if (wantsHtml) {
+      return respondHtml({ language, success: message });
+    }
+
+    res.json({
+      success: true,
+      type: verified.type,
+      message,
+      language
+    });
+  } catch (error) {
+    console.error('Error processing email unsubscribe:', error);
+    const message = 'Error processing unsubscribe request';
+    if (wantsHtml) {
+      return respondHtml({ language: 'en', error: message, statusCode: 500 });
+    }
+    res.status(500).json({
+      message,
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 router.put('/preferred-language', authenticateToken, async (req, res) => {
   try {
     const { language, preferredLanguage } = req.body || {};
@@ -788,7 +885,7 @@ router.post('/weekly-chronicle-settings/send-test', authenticateToken, async (re
     const report = await buildWeeklyChronicleReport(user, new Date(), {
       language: requestLanguage
     });
-    await sendWeeklyChronicleEmail(user.email, report);
+    await sendWeeklyChronicleEmail(user.email, report, user._id);
 
     res.json({
       message: 'Weekly chronicle test email sent',
@@ -824,6 +921,7 @@ router.post('/reactivation-email/send-test', authenticateToken, async (req, res)
     const sparksBalance = Math.max(0, Number(user.sparks) || 0);
 
     await sendReactivationEmail(user.email, {
+      userId: user._id,
       userName: user.name,
       sparksBalance,
       language: resolvedLanguage
