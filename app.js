@@ -37,12 +37,21 @@ const devOrigins = [
   'http://localhost:3000'
 ];
 const localhostOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+const netlifyOriginPattern = /^https:\/\/([\w.-]+--)?challenge-me-space\.netlify\.app$/;
 
 function isLocalhostOrigin(origin) {
   return Boolean(origin && localhostOriginPattern.test(origin));
 }
 
-const defaultAllowedOrigins = ['https://ignite-me.app', ...devOrigins];
+function isNetlifyOrigin(origin) {
+  return Boolean(origin && netlifyOriginPattern.test(origin));
+}
+
+const defaultAllowedOrigins = [
+  'https://ignite-me.app',
+  'https://challenge-me-space.netlify.app',
+  ...devOrigins
+];
 
 const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
   .split(',')
@@ -53,7 +62,7 @@ const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...envAllow
 
 const corsOptions = {
   origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin) || isLocalhostOrigin(origin)) {
+    if (!origin || allowedOrigins.includes(origin) || isLocalhostOrigin(origin) || isNetlifyOrigin(origin)) {
       return callback(null, true);
     }
     console.warn(`CORS blocked request from origin: ${origin}`);
