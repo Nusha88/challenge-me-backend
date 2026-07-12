@@ -34,6 +34,14 @@ function isAllowedImageUrl(rawUrl) {
   }
 }
 
+function inferImageContentType(rawUrl) {
+  const lower = rawUrl.toLowerCase()
+  if (lower.includes('.png')) return 'image/png'
+  if (lower.includes('.webp')) return 'image/webp'
+  if (lower.includes('.gif')) return 'image/gif'
+  return 'image/jpeg'
+}
+
 // Proxies image uploads to ImgBB so the API key stays server-side and never
 // ships in the client bundle. Accepts a base64-encoded image (no data: prefix).
 // A route-scoped body parser allows the large payload without raising the
@@ -108,10 +116,10 @@ router.get('/image-data', authenticateToken, async (req, res) => {
       return res.status(502).json({ message: 'Failed to fetch image' });
     }
 
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
-    if (!contentType.startsWith('image/')) {
-      return res.status(400).json({ message: 'URL did not resolve to an image' });
-    }
+    const rawContentType = response.headers.get('content-type') || ''
+    const contentType = rawContentType.startsWith('image/')
+      ? rawContentType.split(';')[0]
+      : inferImageContentType(rawUrl)
 
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.length > 8 * 1024 * 1024) {
