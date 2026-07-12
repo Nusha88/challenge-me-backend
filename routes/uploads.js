@@ -14,6 +14,26 @@ if (!IMGBB_API_KEY) {
 // at 5MB, so this is a comfortable server-side ceiling.
 const MAX_BASE64_LENGTH = 13 * 1024 * 1024;
 
+const ALLOWED_IMAGE_HOSTS = new Set([
+  'i.ibb.co',
+  'ibb.co',
+  'imgbb.com',
+  'i.imgur.com',
+  'imgur.com'
+]);
+
+function isAllowedImageUrl(rawUrl) {
+  try {
+    const { protocol, hostname } = new URL(rawUrl);
+    if (protocol !== 'https:') return false;
+    return ALLOWED_IMAGE_HOSTS.has(hostname)
+      || hostname.endsWith('.ibb.co')
+      || hostname.endsWith('.imgbb.com');
+  } catch {
+    return false;
+  }
+}
+
 // Proxies image uploads to ImgBB so the API key stays server-side and never
 // ships in the client bundle. Accepts a base64-encoded image (no data: prefix).
 // A route-scoped body parser allows the large payload without raising the
@@ -70,5 +90,43 @@ router.post(
     }
   }
 );
+
+// Fetches a remote image server-side and returns a data URL. Used by the invite
+// card export on mobile browsers where cross-origin canvas reads are blocked.
+router.get('/image-data', authenticateToken, async (req, res) => {
+  try {
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    if (!rawUrl) {
+      return res.status(400).json({ message: 'url query parameter is required' });
+    }
+    if (!isAllowedImageUrl(rawUrl)) {
+      return res.status(400).json({ message: 'Image URL is not allowed' });
+    }
+
+    const response = await fetch(rawUrl, { redirect: 'follow' });
+    if (!response.ok) {
+      return res.status(502).json({ message: 'Failed to fetch image' });
+    }
+
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    if (!contentType.startsWith('image/')) {
+      return res.status(400).json({ message: 'URL did not resolve to an image' });
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > 8 * 1024 * 1024) {
+      return res.status(413).json({ message: 'Image too large' });
+    }
+
+    const dataUrl = `data:${contentType};base64,${buffer.toString('base64')}`;
+    res.json({ dataUrl });
+  } catch (error) {
+    console.error('[Uploads] Image data proxy error:', error);
+    res.status(500).json({
+      message: 'Error fetching image data',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 module.exports = router;
