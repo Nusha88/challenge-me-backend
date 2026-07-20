@@ -41,17 +41,21 @@ function buildDayKeysInclusive(startKey, endKey) {
 }
 
 /**
- * When sending on Sunday, returns Mon–Sun of the previous complete calendar week.
+ * When sending on Sunday, returns the previous complete "Sun–Sat" calendar week.
+ *
+ * Example (if sundayLocalDateKey = 2026-07-19):
+ * - start: 2026-07-12
+ * - end:   2026-07-18
  */
 function getLastCompleteWeekBounds(sundayLocalDateKey) {
   const lastSunday = addDaysToYmd(sundayLocalDateKey, -7);
-  const lastMonday = addDaysToYmd(lastSunday, -6);
+  const lastSaturday = addDaysToYmd(sundayLocalDateKey, -1);
 
   return {
-    start: lastMonday,
-    end: lastSunday,
-    weekKey: `${lastMonday}_${lastSunday}`,
-    dayKeys: buildDayKeysInclusive(lastMonday, lastSunday)
+    start: lastSunday,
+    end: lastSaturday,
+    weekKey: `${lastSunday}_${lastSaturday}`,
+    dayKeys: buildDayKeysInclusive(lastSunday, lastSaturday)
   };
 }
 
