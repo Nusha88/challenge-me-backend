@@ -8,6 +8,8 @@ const { getFirstName } = require('./reactivationEmailMessages');
 const { sendReactivationEmail } = require('./emailService');
 
 const MISSED_DAYS_REQUIRED = 3;
+/** After this many consecutive missed days, stop sending reactivation emails. */
+const MAX_INACTIVE_DAYS_FOR_EMAIL = 6;
 
 function getUserTimezone(user) {
   return user?.dailyRecapTimezone || 'UTC';
@@ -22,29 +24,40 @@ function buildInactiveStreakKey(dayKeys) {
 }
 
 /**
- * Returns streak key when the user missed all scheduled habits on each of the
- * last 3 consecutive calendar days ending yesterday (in their timezone).
+ * Returns a stable streak key for the current inactivity pause when the user
+ * missed all scheduled habits for 3–6 consecutive calendar days ending
+ * yesterday (in their timezone). After a full week of no progress, returns null.
+ *
+ * The key is based on the first 3 missed days of the pause so it does not slide
+ * day-to-day (which would re-trigger the email every day).
  */
 function detectInactiveHabitStreak(challenges, userId, todayLocalKey) {
-  const dayKeys = [];
+  const missedNewestFirst = [];
 
-  for (let offset = MISSED_DAYS_REQUIRED; offset >= 1; offset -= 1) {
-    dayKeys.push(addDaysToYmd(todayLocalKey, -offset));
-  }
-
-  for (const dayKey of dayKeys) {
+  for (let offset = 1; offset <= MAX_INACTIVE_DAYS_FOR_EMAIL + 1; offset += 1) {
+    const dayKey = addDaysToYmd(todayLocalKey, -offset);
     const progress = getMissionProgressForDate(challenges, userId, dayKey);
 
-    if (progress.total <= 0) {
-      return null;
+    if (progress.total <= 0 || progress.completed > 0) {
+      break;
     }
 
-    if (progress.completed > 0) {
-      return null;
-    }
+    missedNewestFirst.push(dayKey);
   }
 
-  return buildInactiveStreakKey(dayKeys);
+  const missedCount = missedNewestFirst.length;
+
+  if (missedCount < MISSED_DAYS_REQUIRED) {
+    return null;
+  }
+
+  // A full week (7+) of no progress — do not send reactivation emails anymore.
+  if (missedCount > MAX_INACTIVE_DAYS_FOR_EMAIL) {
+    return null;
+  }
+
+  const chronological = [...missedNewestFirst].reverse();
+  return buildInactiveStreakKey(chronological.slice(0, MISSED_DAYS_REQUIRED));
 }
 
 async function loadHabitChallengesForUsers(userIds) {
@@ -81,7 +94,8 @@ function shouldSendReactivationEmail(user, streakKey) {
   if (!streakKey) return false;
   if (!user?.email) return false;
   if (user.reactivationEmailEnabled === false) return false;
-  if (user.reactivationEmailSentStreakKey === streakKey) return false;
+  // One email per pause — any prior send blocks until the user logs progress again.
+  if (user.reactivationEmailSentStreakKey) return false;
 
   return true;
 }
@@ -123,6 +137,7 @@ async function processUserReactivation(user, now, habitChallenges) {
 
 module.exports = {
   MISSED_DAYS_REQUIRED,
+  MAX_INACTIVE_DAYS_FOR_EMAIL,
   getUserTimezone,
   detectInactiveHabitStreak,
   loadHabitChallengesForUsers,

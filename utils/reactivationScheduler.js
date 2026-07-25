@@ -86,7 +86,7 @@ async function runReactivationTick() {
       _id: { $in: habitUserIds },
       email: { $exists: true, $ne: '' }
     })
-      .select('_id name email sparks dailyRecapTimezone preferredLanguage dailyRecapLanguage reactivationEmailSentStreakKey reactivationEmailLastCheckedLocalDate')
+      .select('_id name email sparks dailyRecapTimezone preferredLanguage dailyRecapLanguage reactivationEmailEnabled reactivationEmailSentStreakKey reactivationEmailLastCheckedLocalDate')
       .lean();
 
     const dueUsers = candidates.filter((user) => isUserDueForReactivationTick(user, now));
@@ -96,7 +96,7 @@ async function runReactivationTick() {
     const dueUserIds = dueUsers.map((user) => user._id);
     const challengesByUserId = await loadHabitChallengesForUsers(dueUserIds);
     const dueUserDocs = await User.find({ _id: { $in: dueUserIds } }).select(
-      '_id name email sparks dailyRecapTimezone preferredLanguage dailyRecapLanguage reactivationEmailSentStreakKey reactivationEmailLastCheckedLocalDate'
+      '_id name email sparks dailyRecapTimezone preferredLanguage dailyRecapLanguage reactivationEmailEnabled reactivationEmailSentStreakKey reactivationEmailLastCheckedLocalDate'
     );
 
     for (const user of dueUserDocs) {

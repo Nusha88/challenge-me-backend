@@ -216,7 +216,7 @@ async function sendWeeklyChronicleEmail(email, report, userId) {
 }
 
 /**
- * Send habit re-engagement email after 3-day ritual pause.
+ * Send habit re-engagement email once after a 3-day ritual pause (not after a full week inactive).
  * @param {string} email
  * @param {{ userName?: string, firstName?: string, sparksBalance?: number, language?: string }} payload
  */
