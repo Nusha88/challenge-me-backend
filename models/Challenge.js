@@ -87,6 +87,12 @@ const challengeSchema = new mongoose.Schema(
       type: Date,
       default: null
     },
+    /** Source mission id when this challenge was created via Extend. */
+    extendedFrom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Challenge',
+      default: null
+    },
     difficulty: {
       type: String,
       enum: ['easy', 'medium', 'heroic'],

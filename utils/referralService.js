@@ -113,6 +113,7 @@ async function getReferralStatsForUser(userId, origin) {
     referralLink: buildReferralLink(referralCode, origin),
     invitedCount,
     maxInvites: MAX_COMPLETED_REFERRALS,
+    remainingInvites: Math.max(0, MAX_COMPLETED_REFERRALS - invitedCount),
     canInviteMore: invitedCount < MAX_COMPLETED_REFERRALS,
     showReferralUi: invitedCount < MAX_COMPLETED_REFERRALS
   };

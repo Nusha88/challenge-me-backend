@@ -112,11 +112,13 @@ router.get('/users', async (req, res) => {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 21;
     const searchQuery = req.query.search ? req.query.search.trim() : null;
+    const sort = req.query.sort ? String(req.query.sort).trim() : 'xp';
 
     const { users, totalUsers, pagination } = await fetchPaginatedUsers(User, {
       searchQuery,
       page,
-      limit
+      limit,
+      sort
     });
 
     res.json({

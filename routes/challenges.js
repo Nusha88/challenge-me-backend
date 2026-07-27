@@ -111,6 +111,84 @@ function escapeRegExp(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Normalize and validate nested result-challenge actions.
+ * Returns { ok: true, actions } or { ok: false, message }.
+ */
+function sanitizeChallengeActions(rawActions, { requireNonEmpty = false } = {}) {
+  if (rawActions === undefined) {
+    return { ok: true, actions: undefined };
+  }
+
+  if (!Array.isArray(rawActions)) {
+    return { ok: false, message: 'Actions must be an array' };
+  }
+
+  const actions = rawActions.map((action) => {
+    const text = typeof action?.text === 'string' ? action.text.trim() : '';
+    const children = Array.isArray(action?.children)
+      ? action.children.map((child) => {
+          const childText = typeof child?.text === 'string' ? child.text.trim() : '';
+          const normalizedChild = {
+            text: childText,
+            checked: Boolean(child?.checked)
+          };
+          if (child?._id) normalizedChild._id = child._id;
+          return normalizedChild;
+        }).filter((child) => child.text)
+      : [];
+
+    const normalized = {
+      text,
+      checked: Boolean(action?.checked),
+      children
+    };
+    if (action?._id) normalized._id = action._id;
+    return normalized;
+  }).filter((action) => action.text || (action.children && action.children.length > 0));
+
+  if (requireNonEmpty) {
+    const hasFilled = actions.some((action) => action.text);
+    if (!hasFilled) {
+      return { ok: false, message: 'At least one action with text is required' };
+    }
+  }
+
+  // Drop empty-text parents that somehow remain without children
+  const cleaned = actions.filter((action) => action.text);
+  if (requireNonEmpty && cleaned.length === 0) {
+    return { ok: false, message: 'At least one action with text is required' };
+  }
+
+  return { ok: true, actions: cleaned };
+}
+
+/** Clone result actions for a renewed mission (new ids, unchecked). */
+function cloneActionsUnchecked(rawActions) {
+  if (!Array.isArray(rawActions)) return [];
+
+  return rawActions
+    .map((action) => {
+      const text = typeof action?.text === 'string' ? action.text.trim() : '';
+      const children = Array.isArray(action?.children)
+        ? action.children
+            .map((child) => {
+              const childText = typeof child?.text === 'string' ? child.text.trim() : '';
+              return childText ? { text: childText, checked: false } : null;
+            })
+            .filter(Boolean)
+        : [];
+
+      if (!text && children.length === 0) return null;
+      return {
+        text,
+        checked: false,
+        children
+      };
+    })
+    .filter(Boolean);
+}
+
 function flattenResultActionStates(actions) {
   const map = new Map();
   if (!Array.isArray(actions)) return map;
@@ -307,11 +385,11 @@ router.post('/', authenticateToken, async (req, res) => {
     // Explicitly don't set frequency for result challenges
     if (challengeType === 'result') {
       delete challengeData.frequency;
-    }
-    if (actions && challengeType === 'result') {
-      challengeData.actions = actions;
-    }
-    if (challengeType === 'result') {
+      const sanitized = sanitizeChallengeActions(actions, { requireNonEmpty: true });
+      if (!sanitized.ok) {
+        return res.status(400).json({ message: sanitized.message });
+      }
+      challengeData.actions = sanitized.actions;
       challengeData.reward = typeof reward === 'string' ? reward.trim() : '';
     }
     if (allowComments !== undefined) {
@@ -343,6 +421,11 @@ router.patch('/:id/actions', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Actions array is required' });
     }
 
+    const sanitized = sanitizeChallengeActions(actions, { requireNonEmpty: true });
+    if (!sanitized.ok) {
+      return res.status(400).json({ message: sanitized.message });
+    }
+
     const challenge = await Challenge.findById(id);
     if (!challenge) {
       return res.status(404).json({ message: 'Challenge not found' });
@@ -363,7 +446,7 @@ router.patch('/:id/actions', authenticateToken, async (req, res) => {
     const prevActions = JSON.parse(JSON.stringify(challenge.actions || []));
     const wasCompletedBefore = isResultChallengeCompleted(prevActions);
 
-    challenge.actions = actions;
+    challenge.actions = sanitized.actions;
     await challenge.save();
 
     const isCompletedNow = isResultChallengeCompleted(challenge.actions);
@@ -946,7 +1029,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
     }
     
     if (actions !== undefined) {
-      update.actions = actions;
+      const sanitized = sanitizeChallengeActions(actions, {
+        requireNonEmpty: (challengeType || existingChallenge.challengeType) === 'result'
+      });
+      if (!sanitized.ok) {
+        return res.status(400).json({ message: sanitized.message });
+      }
+      update.actions = sanitized.actions;
     } else if (challengeType === 'habit' && !existingChallenge.actions) {
       update.actions = [];
     }
@@ -1150,28 +1239,33 @@ router.post('/:id/leave', authenticateToken, async (req, res) => {
   }
 });
 
-// Extend a finished challenge for sparks
+// Extend a finished challenge for sparks: create a fresh personal copy
+// (new createdAt) so it sorts to the top of My Missions like a new launch.
 router.post('/:id/extend', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const authUserId = req.user.id;
 
-    const challenge = await Challenge.findById(id);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid challenge id' });
+    }
 
-    if (!challenge) {
+    const sourceChallenge = await Challenge.findById(id);
+
+    if (!sourceChallenge) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    const participant = findChallengeParticipant(challenge, authUserId);
+    const participant = findChallengeParticipant(sourceChallenge, authUserId);
     if (!participant) {
       return res.status(403).json({ message: 'You are not a participant of this challenge' });
     }
 
-    if (!isChallengeFinished(challenge)) {
+    if (!isChallengeFinished(sourceChallenge)) {
       return res.status(400).json({ message: 'Only finished missions can be extended' });
     }
 
-    const durationDays = getInclusiveDaysBetween(challenge.startDate, challenge.endDate);
+    const durationDays = getInclusiveDaysBetween(sourceChallenge.startDate, sourceChallenge.endDate);
     if (durationDays < 1) {
       return res.status(400).json({ message: 'Invalid mission duration' });
     }
@@ -1197,43 +1291,61 @@ router.post('/:id/extend', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Unable to spend sparks', reason: spendResult.reason });
     }
 
-    const ownerId = challenge.owner?._id || challenge.owner;
-    const isCurrentUserOwner = ownerId && ownerId.toString() === authUserId.toString();
+    const challengeType = sourceChallenge.challengeType || 'habit';
 
-    challenge.startDate = newStartDate;
-    challenge.endDate = newEndDate;
+    const renewedPayload = {
+      title: sourceChallenge.title,
+      description: sourceChallenge.description || '',
+      imageUrl: sourceChallenge.imageUrl || '',
+      privacy: sourceChallenge.privacy === 'public' ? 'public' : 'private',
+      challengeType,
+      startDate: newStartDate,
+      endDate: newEndDate,
+      owner: authUserId,
+      difficulty: sourceChallenge.difficulty || 'medium',
+      allowComments: sourceChallenge.allowComments !== false,
+      extendedFrom: sourceChallenge._id,
+      participants: [{
+        userId: authUserId,
+        completedDays: [],
+        frozenDays: [],
+        secondChanceDays: [],
+        joinedAt: newStartDate
+      }]
+    };
 
-    if (isCurrentUserOwner) {
-      challenge.participants.forEach((p) => {
-        p.completedDays = [];
-      });
+    if (challengeType === 'habit') {
+      renewedPayload.frequency = sourceChallenge.frequency || 'daily';
     } else {
-      challenge.owner = authUserId;
-      challenge.participants = [{ userId: authUserId, completedDays: [] }];
+      renewedPayload.actions = cloneActionsUnchecked(sourceChallenge.actions);
+      renewedPayload.reward = typeof sourceChallenge.reward === 'string'
+        ? sourceChallenge.reward
+        : '';
     }
 
-    if (challenge.challengeType === 'result') {
-      resetActionsChecked(challenge.actions);
-    }
+    const renewedChallenge = new Challenge(renewedPayload);
 
-    await challenge.save();
+    await renewedChallenge.save();
 
-    const populatedChallenge = await Challenge.findById(id)
+    const populatedChallenge = await Challenge.findById(renewedChallenge._id)
       .populate('owner', 'name avatarUrl')
-      .populate('participants.userId', 'name avatarUrl');
+      .populate('participants.userId', 'name avatarUrl')
+      .lean();
 
     const rewardPayload = buildRewardPayload({
       user: serializeUserForClient(spendResult.user)
     });
 
-    res.json({
+    res.status(201).json({
       message: 'Challenge extended successfully',
       challenge: populatedChallenge,
+      sourceChallengeId: id,
       sparksSpent: extendCost,
       durationDays,
       ...rewardPayload
     });
   } catch (error) {
+    console.error('Error extending challenge:', error);
     res.status(500).json({ message: 'Error extending challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
