@@ -147,6 +147,18 @@ const challengeSchema = new mongoose.Schema(
       type: Boolean,
       default: true
     },
+    likedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+      }
+    ],
+    dislikedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+      }
+    ],
     comments: [
       {
         userId: {

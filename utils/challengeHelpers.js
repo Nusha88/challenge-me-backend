@@ -90,7 +90,35 @@ function collectNewlyCheckedActionIds(prevActions = [], nextActions = []) {
 }
 
 /**
+ * Derive public reaction fields and strip raw likedBy/dislikedBy arrays.
+ * @param {object} challengeObj - Plain challenge object (mutated)
+ * @param {string|null} viewerUserId
+ */
+function applyReactionPublicFields(challengeObj, viewerUserId) {
+  const likedBy = Array.isArray(challengeObj.likedBy) ? challengeObj.likedBy : []
+  const dislikedBy = Array.isArray(challengeObj.dislikedBy) ? challengeObj.dislikedBy : []
+
+  challengeObj.likesCount = likedBy.length
+  challengeObj.dislikesCount = dislikedBy.length
+
+  let userReaction = null
+  if (viewerUserId) {
+    const viewerId = String(viewerUserId)
+    if (likedBy.some((id) => String(id) === viewerId)) {
+      userReaction = 'like'
+    } else if (dislikedBy.some((id) => String(id) === viewerId)) {
+      userReaction = 'dislike'
+    }
+  }
+  challengeObj.userReaction = userReaction
+
+  delete challengeObj.likedBy
+  delete challengeObj.dislikedBy
+}
+
+/**
  * Adds watchersCount and isWatched (for the viewing user) to each challenge.
+ * Also attaches likesCount / dislikesCount / userReaction and strips raw reaction arrays.
  * @param {Array} challenges - Mongoose docs or plain objects
  * @param {string|null} viewerUserId - Authenticated user id, if any
  * @param {import('mongoose').Model} UserModel
@@ -115,6 +143,8 @@ async function enrichChallengesWithWatchState(challenges, viewerUserId, UserMode
       challengeObj.isWatched = watchedIdSet
         ? watchedIdSet.has(String(challengeId))
         : false
+
+      applyReactionPublicFields(challengeObj, viewerUserId)
 
       return challengeObj
     })
@@ -384,6 +414,7 @@ module.exports = {
   isHabitChallengeCompleted,
   countScheduledMissionDays,
   collectNewlyCheckedActionIds,
+  applyReactionPublicFields,
   enrichChallengesWithWatchState,
   findMainRitualChallenge,
   isChallengeFinished,

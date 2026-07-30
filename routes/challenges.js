@@ -10,6 +10,7 @@ const {
   isResultChallengeCompleted,
   isHabitChallengeCompleted,
   collectNewlyCheckedActionIds,
+  applyReactionPublicFields,
   enrichChallengesWithWatchState,
   findMainRitualChallenge,
   isChallengeFinished,
@@ -1974,10 +1975,13 @@ router.get('/watched/:userId', async (req, res) => {
       .populate('participants.userId', 'name avatarUrl')
       .sort({ createdAt: -1 });
 
+    const viewerUserId = decodeOptionalAuthUserId(req);
     const challengesWithWatchers = await Promise.all(challenges.map(async (challenge) => {
       const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
       const challengeObj = challenge.toObject();
       challengeObj.watchersCount = watchersCount;
+      challengeObj.isWatched = true;
+      applyReactionPublicFields(challengeObj, viewerUserId);
       return challengeObj;
     }));
 
@@ -1992,12 +1996,16 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const User = require('../models/User');
+    const viewerUserId = decodeOptionalAuthUserId(req);
 
-    const [challenge, watchersCount] = await Promise.all([
+    const [challenge, watchersCount, viewer] = await Promise.all([
       Challenge.findById(id)
         .populate('owner', 'name avatarUrl')
         .populate('participants.userId', 'name avatarUrl'),
-      User.countDocuments({ watchedChallenges: id })
+      User.countDocuments({ watchedChallenges: id }),
+      viewerUserId
+        ? User.findById(viewerUserId).select('watchedChallenges').lean()
+        : Promise.resolve(null)
     ]);
     
     if (!challenge) {
@@ -2006,6 +2014,10 @@ router.get('/:id', async (req, res) => {
     
     const challengeObj = challenge.toObject();
     challengeObj.watchersCount = watchersCount;
+    challengeObj.isWatched = viewerUserId
+      ? (viewer?.watchedChallenges || []).some((cid) => String(cid) === String(id))
+      : false;
+    applyReactionPublicFields(challengeObj, viewerUserId);
     
     res.json(challengeObj);
   } catch (error) {
@@ -2066,7 +2078,14 @@ router.post('/:id/watch', authenticateToken, async (req, res) => {
     const ownerId = challenge.owner?._id || challenge.owner;
     await notifyChallengeWatch({ ownerId, fromUserId: userId, challenge });
 
-    res.json({ message: 'Challenge added to watch list', watchedChallenges: user.watchedChallenges });
+    const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
+
+    res.json({
+      message: 'Challenge added to watch list',
+      watchedChallenges: user.watchedChallenges,
+      watchersCount,
+      isWatched: true
+    });
   } catch (error) {
     res.status(500).json({ message: 'Error watching challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
@@ -2093,9 +2112,71 @@ router.post('/:id/unwatch', authenticateToken, async (req, res) => {
     );
     await user.save();
 
-    res.json({ message: 'Challenge removed from watch list', watchedChallenges: user.watchedChallenges });
+    const watchersCount = await User.countDocuments({ watchedChallenges: challenge._id });
+
+    res.json({
+      message: 'Challenge removed from watch list',
+      watchedChallenges: user.watchedChallenges,
+      watchersCount,
+      isWatched: false
+    });
   } catch (error) {
     res.status(500).json({ message: 'Error unwatching challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
+  }
+});
+
+// Like / dislike a challenge (YouTube-style toggle)
+router.post('/:id/reaction', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { value } = req.body;
+
+    if (value !== 'like' && value !== 'dislike') {
+      return res.status(400).json({ message: 'value must be "like" or "dislike"' });
+    }
+
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const ownerId = challenge.owner?._id || challenge.owner;
+    if (ownerId && String(ownerId) === String(userId)) {
+      return res.status(403).json({ message: 'You cannot react to your own mission' });
+    }
+
+    if (!Array.isArray(challenge.likedBy)) challenge.likedBy = [];
+    if (!Array.isArray(challenge.dislikedBy)) challenge.dislikedBy = [];
+
+    const uid = String(userId);
+    const likedIdx = challenge.likedBy.findIndex((id) => String(id) === uid);
+    const dislikedIdx = challenge.dislikedBy.findIndex((id) => String(id) === uid);
+    const current = likedIdx >= 0 ? 'like' : dislikedIdx >= 0 ? 'dislike' : null;
+
+    if (current === value) {
+      if (likedIdx >= 0) challenge.likedBy.splice(likedIdx, 1);
+      if (dislikedIdx >= 0) challenge.dislikedBy.splice(dislikedIdx, 1);
+    } else {
+      if (likedIdx >= 0) challenge.likedBy.splice(likedIdx, 1);
+      if (dislikedIdx >= 0) challenge.dislikedBy.splice(dislikedIdx, 1);
+      if (value === 'like') {
+        challenge.likedBy.push(userId);
+      } else {
+        challenge.dislikedBy.push(userId);
+      }
+    }
+
+    await challenge.save();
+
+    const likesCount = challenge.likedBy.length;
+    const dislikesCount = challenge.dislikedBy.length;
+    const stillLiked = challenge.likedBy.some((id) => String(id) === uid);
+    const stillDisliked = challenge.dislikedBy.some((id) => String(id) === uid);
+    const userReaction = stillLiked ? 'like' : stillDisliked ? 'dislike' : null;
+
+    res.json({ likesCount, dislikesCount, userReaction });
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating reaction', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
