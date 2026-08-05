@@ -69,25 +69,31 @@ router.post(
       const form = new URLSearchParams();
       form.append('image', image);
 
+      const startedAt = Date.now();
+      console.log(`[Uploads] Proxying to ImgBB (base64 length=${image.length})`);
+
       const response = await fetch(`${IMGBB_UPLOAD_URL}?key=${IMGBB_API_KEY}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: form
       });
 
+      const imgbbMs = Date.now() - startedAt;
       const payload = await response.json();
 
       if (!response.ok || !payload.success) {
         const msg = payload?.error?.message || payload?.data?.error?.message || 'Upload failed';
-        console.error('[Uploads] ImgBB rejected upload:', msg);
+        console.error(`[Uploads] ImgBB rejected upload after ${imgbbMs}ms:`, msg);
         return res.status(502).json({ message: 'Image upload failed' });
       }
 
       const url = payload?.data?.url || payload?.data?.display_url;
       if (!url) {
+        console.error(`[Uploads] ImgBB returned no URL after ${imgbbMs}ms`);
         return res.status(502).json({ message: 'Upload did not return an image URL' });
       }
 
+      console.log(`[Uploads] ImgBB ok in ${imgbbMs}ms`);
       res.json({ url });
     } catch (error) {
       console.error('[Uploads] Image upload error:', error);
