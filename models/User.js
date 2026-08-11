@@ -168,6 +168,11 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     ref: 'User',
     default: null
   },
+  status: {
+    type: String,
+    enum: ['active', 'disabled'],
+    default: 'active'
+  },
   createdAt: {
     type: Date,
     default: Date.now

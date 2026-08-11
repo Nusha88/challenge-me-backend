@@ -298,6 +298,9 @@ router.post('/login', authRateLimiter, async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
+    if (user.status === 'disabled') {
+      return res.status(403).json({ message: 'Account is disabled' });
+    }
     // Generate JWT
     const token = jwt.sign({ id: user._id, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
     res.json({

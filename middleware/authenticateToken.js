@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
@@ -7,6 +8,10 @@ function getJwtSecret() {
     throw new Error('JWT_SECRET is not configured');
   }
   return secret;
+}
+
+function isDisabledStatus(status) {
+  return status === 'disabled';
 }
 
 // Requires a valid bearer token. Rejects otherwise.
@@ -18,12 +23,26 @@ function authenticateToken(req, res, next) {
     return res.status(401).json({ message: 'Access token required' });
   }
 
-  jwt.verify(token, getJwtSecret(), (err, user) => {
+  jwt.verify(token, getJwtSecret(), async (err, user) => {
     if (err) {
       return res.status(403).json({ message: 'Invalid or expired token' });
     }
-    req.user = user;
-    next();
+
+    try {
+      const dbUser = await User.findById(user.id).select('status').lean();
+      if (!dbUser) {
+        return res.status(403).json({ message: 'Invalid or expired token' });
+      }
+      if (isDisabledStatus(dbUser.status)) {
+        return res.status(403).json({ message: 'Account is disabled' });
+      }
+
+      req.user = user;
+      next();
+    } catch (error) {
+      console.error('Auth status check error:', error);
+      return res.status(500).json({ message: 'Error authenticating request' });
+    }
   });
 }
 

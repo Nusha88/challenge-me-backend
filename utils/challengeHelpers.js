@@ -164,6 +164,7 @@ async function findMainRitualChallenge(ChallengeModel, { today = new Date() } = 
       $match: {
         challengeType: 'habit',
         privacy: { $ne: 'private' },
+        visibility: { $ne: false },
         endDate: { $gte: dayStart }
       }
     },

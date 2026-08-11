@@ -23,6 +23,10 @@ const challengeSchema = new mongoose.Schema(
       enum: ['public', 'private'],
       default: 'public'
     },
+    visibility: {
+      type: Boolean,
+      default: true
+    },
     challengeType: {
       type: String,
       enum: ['habit', 'result'],
@@ -313,7 +317,7 @@ const challengeSchema = new mongoose.Schema(
     ]
   },
   {
-    timestamps: { createdAt: true, updatedAt: false }
+    timestamps: { createdAt: true, updatedAt: true }
   }
 );
 

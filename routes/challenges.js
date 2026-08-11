@@ -1470,6 +1470,8 @@ router.get('/', async (req, res) => {
     
     // Filter by privacy - exclude private challenges
     query.privacy = { $ne: 'private' };
+    // Legacy docs without visibility are treated as visible.
+    query.visibility = { $ne: false };
     
     // Get all challenges first
     let allChallenges = await Challenge.find(query)
@@ -1835,6 +1837,9 @@ router.get('/user/:userId', async (req, res) => {
     if (shouldExcludePrivate) {
       query.privacy = { $ne: 'private' };
     }
+    if (!isOwnProfile) {
+      query.visibility = { $ne: false };
+    }
 
     // Get all challenges first
     let allChallenges = await Challenge.find(query)
@@ -2009,6 +2014,12 @@ router.get('/:id', async (req, res) => {
     ]);
     
     if (!challenge) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+
+    const ownerId = challenge.owner?._id || challenge.owner;
+    const isOwner = viewerUserId && ownerId && String(ownerId) === String(viewerUserId);
+    if (challenge.visibility === false && !isOwner) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
     

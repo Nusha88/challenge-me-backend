@@ -4,11 +4,16 @@ function escapeRegExp(str) {
 }
 
 function buildUserMatchStage(searchQuery) {
-  if (!searchQuery) return {};
-
-  return {
-    name: { $regex: escapeRegExp(searchQuery), $options: 'i' }
+  const match = {
+    // Legacy docs without status are treated as active.
+    status: { $ne: 'disabled' }
   };
+
+  if (searchQuery) {
+    match.name = { $regex: escapeRegExp(searchQuery), $options: 'i' };
+  }
+
+  return match;
 }
 
 const SORT_OPTIONS = {
