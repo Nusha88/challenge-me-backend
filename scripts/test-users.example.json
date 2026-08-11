@@ -1,0 +1,36 @@
+{
+  "users": [
+    {
+      "email": "pupsik@mail.ru",
+      "password": "111111"
+    },
+    {
+     "email": "Natalia@mail.ru",
+      "password": "111111"
+    },
+    {
+      "email": "wwww@mail.ru",
+      "password": "111111"
+    },
+    {
+      "email": "nushe4ka1@mail.ru",
+      "password": "11111111"
+    },
+    {
+      "email": "bulochka@mail.ru",
+      "password": "111111"
+    },
+    {
+      "email": "spark@mail.ru",
+      "password": "111111"
+    },
+    {
+      "email": "sofia@mail.ru",
+      "password": "111111"
+    },
+    {
+      "email": "ludmila@mail.ru",
+      "password": "111111"
+    }
+  ]
+}

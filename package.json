@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",
-    "test": "node utils/dailyProgress.test.js && node utils/watchedFeedService.test.js && node utils/usersListService.test.js"
+    "test": "node utils/dailyProgress.test.js && node utils/watchedFeedService.test.js && node utils/usersListService.test.js",
+    "simulate:rituals": "node scripts/simulate-daily-rituals.js",
+    "simulate:rituals:dry": "node scripts/simulate-daily-rituals.js --dry-run"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
