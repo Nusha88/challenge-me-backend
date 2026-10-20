@@ -46,6 +46,10 @@ const {
   spendSparksOnce
 } = require('../utils/sparksService');
 const {
+  SYSTEM_TEMPLATE_IDS,
+  isSystemTemplateId
+} = require('../constants/systemTemplates');
+const {
   buildResultActionChecklistTaskKey,
   SPARKS_AMOUNTS,
   buildMissionExtendSparksKey,
@@ -353,7 +357,7 @@ function isChallengeCompleted(challenge, today) {
 // Create challenge
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward } = req.body;
+    const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward, templateId } = req.body;
     // Owner is always the authenticated user, never taken from the body.
     const owner = req.user.id;
 
@@ -372,6 +376,9 @@ router.post('/', authenticateToken, async (req, res) => {
     };
     if (imageUrl) {
       challengeData.imageUrl = imageUrl;
+    }
+    if (isSystemTemplateId(templateId)) {
+      challengeData.templateId = String(templateId).trim();
     }
     if (privacy) {
       challengeData.privacy = privacy;
@@ -1306,6 +1313,7 @@ router.post('/:id/extend', authenticateToken, async (req, res) => {
       difficulty: sourceChallenge.difficulty || 'medium',
       allowComments: sourceChallenge.allowComments !== false,
       extendedFrom: sourceChallenge._id,
+      templateId: isSystemTemplateId(sourceChallenge.templateId) ? sourceChallenge.templateId : '',
       participants: [{
         userId: authUserId,
         completedDays: [],
@@ -1472,6 +1480,16 @@ router.get('/', async (req, res) => {
     query.privacy = { $ne: 'private' };
     // Legacy docs without visibility are treated as visible.
     query.visibility = { $ne: false };
+
+    // On the public world board, template-based missions are shown as one
+    // shared card per template — not as individual user copies.
+    if (!owner && !createdBy) {
+      query.$or = [
+        { templateId: { $exists: false } },
+        { templateId: null },
+        { templateId: '' }
+      ];
+    }
     
     // Get all challenges first
     let allChallenges = await Challenge.find(query)
@@ -1658,6 +1676,75 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching challenges', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
+  }
+});
+
+function serializeTemplateParticipant(user) {
+  if (!user) return null;
+  const id = user._id || user.id;
+  if (!id) return null;
+  return {
+    id: String(id),
+    name: user.name || '',
+    avatarUrl: user.avatarUrl || ''
+  };
+}
+
+function collectTemplateParticipants(challenge) {
+  const byId = new Map();
+
+  const owner = serializeTemplateParticipant(challenge.owner);
+  if (owner) byId.set(owner.id, owner);
+
+  for (const participant of challenge.participants || []) {
+    if (participant.habitMissionEndedAt) continue;
+    const user = serializeTemplateParticipant(participant.userId);
+    if (user) byId.set(user.id, user);
+  }
+
+  return [...byId.values()];
+}
+
+// Active public participants grouped by system template id
+router.get('/templates/participants', async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const challenges = await Challenge.find({
+      templateId: { $in: SYSTEM_TEMPLATE_IDS },
+      privacy: { $ne: 'private' },
+      visibility: { $ne: false }
+    })
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl')
+      .lean();
+
+    const participantsByTemplateId = Object.fromEntries(
+      SYSTEM_TEMPLATE_IDS.map((id) => [id, []])
+    );
+
+    for (const challenge of challenges) {
+      if (isChallengeCompleted(challenge, today)) continue;
+
+      const templateId = challenge.templateId;
+      if (!participantsByTemplateId[templateId]) continue;
+
+      const existingById = new Map(
+        participantsByTemplateId[templateId].map((user) => [user.id, user])
+      );
+      for (const user of collectTemplateParticipants(challenge)) {
+        existingById.set(user.id, user);
+      }
+      participantsByTemplateId[templateId] = [...existingById.values()];
+    }
+
+    res.json({ participantsByTemplateId });
+  } catch (error) {
+    res.status(500).json({
+      message: 'Error fetching template participants',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 

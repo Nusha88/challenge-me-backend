@@ -97,6 +97,13 @@ const challengeSchema = new mongoose.Schema(
       ref: 'Challenge',
       default: null
     },
+    /** System template id when this challenge was launched from a shared ritual. */
+    templateId: {
+      type: String,
+      default: '',
+      trim: true,
+      index: true
+    },
     difficulty: {
       type: String,
       enum: ['easy', 'medium', 'heroic'],
