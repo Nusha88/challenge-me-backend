@@ -99,6 +99,15 @@ async function findForRecapBatch(dueUsers, now) {
   return map;
 }
 
+async function hasChecklistActivity(userId) {
+  if (!userId) return false;
+  const found = await DailyChecklist.exists({
+    userId,
+    'tasks.0': { $exists: true }
+  });
+  return Boolean(found);
+}
+
 async function getChecklistHistory(userId, legacyChecklists = [], tzOffsetMin = null) {
   const docs = await DailyChecklist.find({ userId })
     .sort({ localDate: -1 })
@@ -130,5 +139,6 @@ module.exports = {
   upsertChecklist,
   findManyByLocalDates,
   findForRecapBatch,
+  hasChecklistActivity,
   getChecklistHistory
 };

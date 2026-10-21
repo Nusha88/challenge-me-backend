@@ -81,6 +81,32 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: [String],
     default: []
   },
+  wishItems: [{
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 80
+    },
+    cost: {
+      type: Number,
+      required: true,
+      min: 10,
+      max: 9999
+    }
+  }],
+  inventory: {
+    freezeTokens: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    secondChanceTokens: {
+      type: Number,
+      default: 0,
+      min: 0
+    }
+  },
   sparksDailyCap: {
     clientDay: {
       type: String,

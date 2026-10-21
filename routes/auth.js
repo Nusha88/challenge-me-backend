@@ -50,9 +50,10 @@ const {
 } = require('../utils/xpService');
 const {
   awardChecklistTaskSparks,
-  awardManifestSparks,
-  spendSparksOnce
+  awardManifestSparks
 } = require('../utils/sparksService');
+const { consumeInventoryTokenOrSpendSparks } = require('../utils/shopService');
+const { serializeUserForClient } = require('../utils/userSerializer');
 const { awardUserStreakMilestones } = require('../utils/userStreak');
 const {
   buildChecklistTaskAwardKey,
@@ -75,21 +76,11 @@ const {
   resolveReferrerByCode,
   createPendingReferral,
   getReferralStatsForUser,
-  getReferralProfileFlags
+  getReferralProfileFlags,
+  applyWelcomeBonusesForUser,
+  getWelcomeBonusRewardPayload
 } = require('../utils/referralService');
 
-function serializeUserForClient(user) {
-  if (!user) return null;
-  return {
-    id: user._id,
-    name: user.name,
-    email: user.email,
-    avatarUrl: user.avatarUrl,
-    xp: user.xp || 0,
-    sparks: user.sparks || 0,
-    createdAt: user.createdAt
-  };
-}
 
 // Signing secret is guaranteed present by the boot-time check in app.js.
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -250,13 +241,7 @@ router.post('/register', registerRateLimiter, async (req, res) => {
       message: 'User registered successfully',
       token,
       user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        avatarUrl: user.avatarUrl,
-        xp: user.xp || 0,
-        sparks: user.sparks || 0,
-        createdAt: user.createdAt,
+        ...serializeUserForClient(user),
         referredBy: user.referredBy || null
       }
     });
@@ -302,15 +287,7 @@ router.post('/login', authRateLimiter, async (req, res) => {
     res.json({
       message: 'Login successful',
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        avatarUrl: user.avatarUrl,
-        xp: user.xp || 0,
-        sparks: user.sparks || 0,
-        createdAt: user.createdAt
-      }
+      user: serializeUserForClient(user)
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -321,12 +298,18 @@ router.post('/login', authRateLimiter, async (req, res) => {
 // Get current user's profile (protected)
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
+    const welcomeBonusPayload = await getWelcomeBonusRewardPayload(
+      req.user.id,
+      serializeUserForClient
+    );
+
     const user = await User.findById(req.user.id, {
       name: 1,
       email: 1,
       avatarUrl: 1,
       xp: 1,
       sparks: 1,
+      inventory: 1,
       createdAt: 1,
       referredBy: 1,
       _id: 1
@@ -342,20 +325,15 @@ router.get('/profile', authenticateToken, async (req, res) => {
 
     res.json({
       user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        avatarUrl: user.avatarUrl,
-        xp: user.xp || 0,
-        sparks: user.sparks || 0,
-        createdAt: user.createdAt,
+        ...serializeUserForClient(user),
         challengeCount,
         referredBy: referralFlags.referredBy,
         hasFirstMission: referralFlags.hasFirstMission,
         referralHookPending: referralFlags.referralHookPending,
         welcomeHookPending: referralFlags.welcomeHookPending,
         welcomeHookType: referralFlags.welcomeHookType
-      }
+      },
+      ...welcomeBonusPayload
     });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching profile', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
@@ -505,8 +483,11 @@ router.post('/sparks/freeze-day', authenticateToken, async (req, res) => {
 
     const cost = SPARKS_AMOUNTS.FREEZE_DAY;
     const spendKey = buildFreezeDaySparksKey(userId, clientDayStr);
-    const spendResult = await spendSparksOnce(userId, spendKey, cost, {
-      clientDay: clientDayStr
+    const spendResult = await consumeInventoryTokenOrSpendSparks(userId, {
+      tokenField: 'inventory.freezeTokens',
+      spendKey,
+      sparkCost: cost,
+      meta: { clientDay: clientDayStr }
     });
 
     if (!spendResult.success) {
@@ -535,7 +516,8 @@ router.post('/sparks/freeze-day', authenticateToken, async (req, res) => {
 
     res.json({
       message: 'Day frozen successfully',
-      sparksSpent: cost,
+      sparksSpent: spendResult.sparksSpent,
+      paidWith: spendResult.paidWith,
       challenges: updatedChallenges,
       ...rewardPayload
     });
@@ -673,7 +655,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.user.id,
       { $set: updates },
-      { new: true, select: 'name email avatarUrl xp sparks createdAt _id' }
+      { new: true, select: 'name email avatarUrl xp sparks inventory createdAt _id' }
     );
 
     if (!user) {
@@ -1022,6 +1004,9 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
     const streakRewards = await awardUserStreakMilestones(req, user);
     xpResults.push(...streakRewards.xpResults);
     sparksResults.push(...streakRewards.sparksResults);
+
+    const welcomeSparks = await applyWelcomeBonusesForUser(user._id);
+    sparksResults.push(...welcomeSparks);
 
     const latestUser = await User.findById(user._id).select('name email avatarUrl xp sparks createdAt _id');
     const updatedChecklist = await findByClientDay(

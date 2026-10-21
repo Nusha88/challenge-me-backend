@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Referral = require('../models/Referral');
 const Challenge = require('../models/Challenge');
 const { awardSparksOnce } = require('./sparksService');
+const { hasChecklistActivity } = require('./dailyChecklistService');
 const { SPARKS_AMOUNTS, buildReferralSparksKey, buildSignupBonusSparksKey } = require('../constants/sparksRules');
 const { buildRewardPayload } = require('./rewardResponse');
 const { notifyReferralCompleted } = require('./notificationService');
@@ -119,6 +120,25 @@ async function getReferralStatsForUser(userId, origin) {
   };
 }
 
+async function userHasChecklistActivity(userId) {
+  if (await hasChecklistActivity(userId)) return true;
+
+  const user = await User.findById(userId).select('dailyChecklists.tasks').lean();
+  if (!user) return false;
+  return (user.dailyChecklists || []).some((checklist) => (
+    Array.isArray(checklist.tasks) && checklist.tasks.length > 0
+  ));
+}
+
+async function userHasStarted(userId) {
+  const missionCount = await countUserMissions(userId);
+  if (missionCount > 0) {
+    return { started: true, missionCount };
+  }
+  const hasChecklist = await userHasChecklistActivity(userId);
+  return { started: hasChecklist, missionCount };
+}
+
 async function getReferralProfileFlags(userId) {
   const user = await User.findById(userId).select('referredBy');
   if (!user) {
@@ -131,9 +151,9 @@ async function getReferralProfileFlags(userId) {
     };
   }
 
-  const missionCount = await countUserMissions(userId);
+  const { started, missionCount } = await userHasStarted(userId);
   const hasFirstMission = missionCount > 0;
-  const welcomeHookPending = !hasFirstMission;
+  const welcomeHookPending = !started;
   const welcomeHookType = welcomeHookPending
     ? (user.referredBy ? 'referral' : 'signup')
     : null;
@@ -141,16 +161,16 @@ async function getReferralProfileFlags(userId) {
   return {
     referredBy: user.referredBy || null,
     hasFirstMission,
-    referralHookPending: Boolean(user.referredBy) && !hasFirstMission,
+    referralHookPending: Boolean(user.referredBy) && welcomeHookPending,
     welcomeHookPending,
     welcomeHookType
   };
 }
 
 async function tryCompleteReferral(refereeId) {
-  const missionCount = await countUserMissions(refereeId);
-  if (missionCount !== 1) {
-    return { completed: false, reason: 'not_first_mission' };
+  const { started } = await userHasStarted(refereeId);
+  if (!started) {
+    return { completed: false, reason: 'not_started' };
   }
 
   const referral = await Referral.findOne({
@@ -192,9 +212,9 @@ async function tryCompleteReferral(refereeId) {
 }
 
 async function tryCompleteSignupBonus(userId) {
-  const missionCount = await countUserMissions(userId);
-  if (missionCount !== 1) {
-    return { completed: false, reason: 'not_first_mission' };
+  const { started } = await userHasStarted(userId);
+  if (!started) {
+    return { completed: false, reason: 'not_started' };
   }
 
   const user = await User.findById(userId).select('referredBy');

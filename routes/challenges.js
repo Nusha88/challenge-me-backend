@@ -45,6 +45,8 @@ const {
   awardQuestActionSparks,
   spendSparksOnce
 } = require('../utils/sparksService');
+const { consumeInventoryTokenOrSpendSparks } = require('../utils/shopService');
+const { serializeUserForClient } = require('../utils/userSerializer');
 const {
   SYSTEM_TEMPLATE_IDS,
   isSystemTemplateId
@@ -83,18 +85,6 @@ async function appendStreakMilestoneRewards(req, userId, xpResults, sparksResult
   return awarded?.user || updatedUser;
 }
 
-function serializeUserForClient(user) {
-  if (!user) return null;
-  return {
-    id: user._id,
-    name: user.name,
-    email: user.email,
-    avatarUrl: user.avatarUrl,
-    xp: user.xp || 0,
-    sparks: user.sparks || 0,
-    createdAt: user.createdAt
-  };
-}
 
 async function maybeAwardMissionCommentSparks(req, userId, challenge, ownerId) {
   let finalUser = userId
@@ -1438,9 +1428,14 @@ router.post('/:id/second-chance', authenticateToken, async (req, res) => {
 
     const cost = SPARKS_AMOUNTS.SECOND_CHANCE;
     const spendKey = buildSecondChanceSparksKey(id, authUserId, clientDayStr);
-    const spendResult = await spendSparksOnce(authUserId, spendKey, cost, {
-      challengeId: id,
-      clientDay: clientDayStr
+    const spendResult = await consumeInventoryTokenOrSpendSparks(authUserId, {
+      tokenField: 'inventory.secondChanceTokens',
+      spendKey,
+      sparkCost: cost,
+      meta: {
+        challengeId: id,
+        clientDay: clientDayStr
+      }
     });
 
     if (!spendResult.success) {
@@ -1467,7 +1462,8 @@ router.post('/:id/second-chance', authenticateToken, async (req, res) => {
     res.json({
       message: 'Second chance applied successfully',
       challenge: populatedChallenge,
-      sparksSpent: cost,
+      sparksSpent: spendResult.sparksSpent,
+      paidWith: spendResult.paidWith,
       ...rewardPayload
     });
   } catch (error) {
