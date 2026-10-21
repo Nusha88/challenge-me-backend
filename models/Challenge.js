@@ -104,6 +104,11 @@ const challengeSchema = new mongoose.Schema(
       trim: true,
       index: true
     },
+    /** True when created from the featured weekly ritual of that week. */
+    isWeeklyRitual: {
+      type: Boolean,
+      default: false
+    },
     difficulty: {
       type: String,
       enum: ['easy', 'medium', 'heroic'],

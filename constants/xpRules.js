@@ -9,7 +9,7 @@ const XP_EVENT_TYPES = Object.freeze({
 });
 
 const XP_AMOUNTS = Object.freeze({
-  HABIT_DAY: 5,
+  HABIT_DAY: 10,
   HABIT_COMPLETION: 100,
   RESULT_ACTION: 10,
   CHECKLIST_TASK: 5,
@@ -20,7 +20,8 @@ const XP_AMOUNTS = Object.freeze({
     heroic: 200
   }),
   STREAK_MILESTONE_BY_DAY: Object.freeze({
-    7: 50
+    7: 50,
+    14: 75
   })
 });
 

@@ -6,6 +6,9 @@ const {
   isDateScheduledForChallenge
 } = require('./challengeHelpers');
 const { normalizeDateLikeToYmd } = require('./dateHelpers');
+const { isWeeklyRitualChallenge } = require('./weeklyRitual');
+
+const SUSTAINED_REWARD_RATIO = 0.53;
 
 const MISSION_TIERS = Object.freeze({
   PERFECT: 'perfect',
@@ -56,24 +59,32 @@ function resolveMissionTier(completionRate) {
   return MISSION_TIERS.EXTINGUISHED;
 }
 
-function getTierRewards(tier) {
+function getCompletionSparksBase(isWeeklyRitual = false) {
+  return isWeeklyRitual
+    ? SPARKS_AMOUNTS.WEEKLY_RITUAL_COMPLETION
+    : SPARKS_AMOUNTS.MISSION_COMPLETION;
+}
+
+function getTierRewards(tier, { isWeeklyRitual = false } = {}) {
+  const completionSparks = getCompletionSparksBase(isWeeklyRitual);
+
   switch (tier) {
     case MISSION_TIERS.PERFECT:
       return {
         xp: XP_AMOUNTS.HABIT_COMPLETION,
-        sparks: SPARKS_AMOUNTS.MISSION_COMPLETION,
+        sparks: completionSparks,
         badge: 'perfect_flame'
       };
     case MISSION_TIERS.BRIGHT:
       return {
         xp: XP_AMOUNTS.HABIT_COMPLETION,
-        sparks: SPARKS_AMOUNTS.MISSION_COMPLETION,
+        sparks: completionSparks,
         badge: null
       };
     case MISSION_TIERS.SUSTAINED:
       return {
         xp: Math.round(XP_AMOUNTS.HABIT_COMPLETION * 0.5),
-        sparks: Math.round(SPARKS_AMOUNTS.MISSION_COMPLETION * 0.53),
+        sparks: Math.round(completionSparks * SUSTAINED_REWARD_RATIO),
         badge: null
       };
     default:
@@ -133,7 +144,8 @@ function isMissionFinalDay(challenge, clientDayStr) {
 function buildHabitMissionRewardSummary(challenge, participant) {
   const completionRate = calculateCompletionRate(challenge, participant);
   const tier = resolveMissionTier(completionRate);
-  const rewards = getTierRewards(tier);
+  const isWeeklyRitual = isWeeklyRitualChallenge(challenge);
+  const rewards = getTierRewards(tier, { isWeeklyRitual });
   const personalTotal = countPersonalScheduledDays(challenge, participant);
   const personalDone = countPersonalEffectiveDays(challenge, participant);
   const standardDuration = getStandardMissionDuration(challenge);
@@ -147,6 +159,7 @@ function buildHabitMissionRewardSummary(challenge, participant) {
     totalXp: rewards.xp,
     totalSparks: rewards.sparks,
     badge: rewards.badge,
+    isWeeklyRitual,
     joinedAt: getParticipantJoinedAtKey(challenge, participant),
     isLateJoiner: isLateJoiner(challenge, participant),
     needsSoloContinuation: needsSoloContinuation(challenge, participant)
@@ -160,6 +173,7 @@ module.exports = {
   countPersonalEffectiveDays,
   calculateCompletionRate,
   resolveMissionTier,
+  getCompletionSparksBase,
   getTierRewards,
   getStandardMissionDuration,
   isLateJoiner,

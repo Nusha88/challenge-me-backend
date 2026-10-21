@@ -49,6 +49,7 @@ const {
   SYSTEM_TEMPLATE_IDS,
   isSystemTemplateId
 } = require('../constants/systemTemplates');
+const { isWeeklyRitualTemplate } = require('../utils/weeklyRitual');
 const {
   buildResultActionChecklistTaskKey,
   SPARKS_AMOUNTS,
@@ -66,6 +67,21 @@ const {
 } = require('../utils/missionTierService');
 const { buildWatchedFeedActivities } = require('../utils/watchedFeedService');
 const { clearReactivationStreakFlag } = require('../utils/reactivationService');
+const { awardUserStreakMilestones } = require('../utils/userStreak');
+
+async function appendStreakMilestoneRewards(req, userId, xpResults, sparksResults, updatedUser) {
+  const streakUser = await User.findById(userId);
+  if (!streakUser) return updatedUser;
+
+  const streakRewards = await awardUserStreakMilestones(req, streakUser);
+  xpResults.push(...streakRewards.xpResults);
+  sparksResults.push(...streakRewards.sparksResults);
+
+  const awarded = [...streakRewards.xpResults, ...streakRewards.sparksResults]
+    .reverse()
+    .find((result) => result.awarded && result.user);
+  return awarded?.user || updatedUser;
+}
 
 function serializeUserForClient(user) {
   if (!user) return null;
@@ -378,7 +394,9 @@ router.post('/', authenticateToken, async (req, res) => {
       challengeData.imageUrl = imageUrl;
     }
     if (isSystemTemplateId(templateId)) {
+      const { clientDayStr } = getClientDayRange(req);
       challengeData.templateId = String(templateId).trim();
+      challengeData.isWeeklyRitual = isWeeklyRitualTemplate(challengeData.templateId, clientDayStr);
     }
     if (privacy) {
       challengeData.privacy = privacy;
@@ -840,6 +858,16 @@ router.post('/:id/end-habit-mission', authenticateToken, async (req, res) => {
       if (sparksResult.awarded && sparksResult.user) {
         updatedUser = sparksResult.user;
       }
+    }
+
+    if (addedDays.length > 0) {
+      updatedUser = await appendStreakMilestoneRewards(
+        req,
+        authUserId,
+        xpResults,
+        sparksResults,
+        updatedUser
+      );
     }
 
     const updatedParticipant = challenge.participants[participantIndex];
@@ -1314,6 +1342,7 @@ router.post('/:id/extend', authenticateToken, async (req, res) => {
       allowComments: sourceChallenge.allowComments !== false,
       extendedFrom: sourceChallenge._id,
       templateId: isSystemTemplateId(sourceChallenge.templateId) ? sourceChallenge.templateId : '',
+      isWeeklyRitual: isWeeklyRitualTemplate(sourceChallenge.templateId, clientDayStr),
       participants: [{
         userId: authUserId,
         completedDays: [],
@@ -1871,6 +1900,16 @@ router.put('/:id/participant/:userId/completedDays', authenticateToken, async (r
       if (sparksResult.awarded && sparksResult.user) {
         updatedUser = sparksResult.user;
       }
+    }
+
+    if (addedDays.length > 0) {
+      updatedUser = await appendStreakMilestoneRewards(
+        req,
+        userId,
+        xpResults,
+        sparksResults,
+        updatedUser
+      );
     }
 
     const rewardPayload = buildRewardPayload({

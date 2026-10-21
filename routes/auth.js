@@ -37,27 +37,23 @@ const {
   getClientDayRange,
   getClientLocalHour,
   toClientDayKey,
-  findLatestChecklistInRange,
   serializeChecklistForClientDay
 } = require('../utils/dateHelpers');
 const {
   findByClientDay,
   upsertChecklist,
-  findManyByLocalDates,
-  hasCompletedChecklistTask,
   getChecklistHistory
 } = require('../utils/dailyChecklistService');
 const {
   awardDailyFullCompletionXp,
-  awardChecklistTaskXp,
-  awardStreakMilestoneXp
+  awardChecklistTaskXp
 } = require('../utils/xpService');
 const {
   awardChecklistTaskSparks,
-  awardStreakMilestoneSparks,
   awardManifestSparks,
   spendSparksOnce
 } = require('../utils/sparksService');
+const { awardUserStreakMilestones } = require('../utils/userStreak');
 const {
   buildChecklistTaskAwardKey,
   buildResultActionChecklistTaskKey,
@@ -1023,82 +1019,9 @@ router.put('/daily-checklist/today', authenticateToken, async (req, res) => {
       anchorDate: todayStartUtc
     });
 
-    // Check for 7-day streak milestone and award XP
-    const habitChallenges = await Challenge.find({
-      challengeType: 'habit',
-      'participants.userId': user._id
-    });
-    
-    // Calculate current streak
-    let currentStreak = 0;
-    
-    const streakDayKeys = [];
-    for (let i = 0; i < 365; i++) {
-      const { clientDayStr } = getClientDayRange(req, -i);
-      streakDayKeys.push(clientDayStr);
-    }
-    const checklistsByLocalDate = await findManyByLocalDates(user._id, streakDayKeys);
-
-    const checkDayCompletion = (startUtc, endUtc, dateStr) => {
-      const checklistForDate = checklistsByLocalDate.get(dateStr)
-        || findLatestChecklistInRange(user.dailyChecklists, startUtc, endUtc);
-
-      const hasCompletedChecklist = hasCompletedChecklistTask(checklistForDate);
-
-      // Check habit challenges
-      let hasCompletedChallenge = false;
-      for (const challenge of habitChallenges) {
-        if (!challenge.participants || challenge.participants.length === 0) continue;
-        
-        const participant = challenge.participants.find(p => {
-          const pUserId = p.userId?._id || p.userId || p._id;
-          return pUserId && pUserId.toString() === user._id.toString();
-        });
-        
-        if (participant && participant.completedDays && Array.isArray(participant.completedDays)) {
-          const hasDate = participant.completedDays.some(completedDate => {
-            if (!completedDate) return false;
-            let completedDateStr = String(completedDate);
-            if (completedDateStr.includes('T')) {
-              completedDateStr = completedDateStr.split('T')[0];
-            }
-            completedDateStr = completedDateStr.substring(0, 10);
-            return completedDateStr === dateStr;
-          });
-          
-          if (hasDate) {
-            hasCompletedChallenge = true;
-            break;
-          }
-        }
-      }
-      
-      return hasCompletedChecklist || hasCompletedChallenge;
-    };
-    
-    // Calculate streak starting from today
-    for (let i = 0; i < 365; i++) {
-      const { startUtc, endUtc, clientDayStr } = getClientDayRange(req, -i);
-      if (checkDayCompletion(startUtc, endUtc, clientDayStr)) {
-        currentStreak++;
-      } else {
-        // If it's today and not completed yet, streak might still be alive if yesterday was completed
-        if (i === 0) continue;
-        break;
-      }
-    }
-    
-    if (currentStreak === 3) {
-      sparksResults.push(await awardStreakMilestoneSparks(user._id, 3, todayStr));
-    }
-
-    if (currentStreak >= 7) {
-      xpResults.push(await awardStreakMilestoneXp(user._id, 7));
-    }
-
-    if (currentStreak === 7) {
-      sparksResults.push(await awardStreakMilestoneSparks(user._id, 7, todayStr));
-    }
+    const streakRewards = await awardUserStreakMilestones(req, user);
+    xpResults.push(...streakRewards.xpResults);
+    sparksResults.push(...streakRewards.sparksResults);
 
     const latestUser = await User.findById(user._id).select('name email avatarUrl xp sparks createdAt _id');
     const updatedChecklist = await findByClientDay(

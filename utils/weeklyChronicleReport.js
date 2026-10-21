@@ -18,6 +18,7 @@ const {
   getLevelFromXp,
   getLevelName,
   getRank,
+  getRankTier,
   getXpForLevel,
   getXpForNextLevel
 } = require('./levelSystem');
@@ -279,6 +280,7 @@ async function buildWeeklyChronicleReport(user, now = new Date(), options = {}) 
 
   const level = getLevelFromXp(user.xp);
   const rankRoman = getRank(level);
+  const rankTier = getRankTier(level);
   const rankName = getLevelName(level, language);
   const xp = Math.max(0, Number(user.xp) || 0);
   const xpLevelStart = getXpForLevel(level);
@@ -326,6 +328,7 @@ async function buildWeeklyChronicleReport(user, now = new Date(), options = {}) 
     rank: {
       level,
       rankRoman,
+      rankTier,
       rankName,
       xp,
       xpInCurrentLevel,

@@ -311,15 +311,22 @@ function buildSparksSectionHtml(report, strings) {
 function buildRankSectionHtml(report, strings) {
   const level = report?.rank?.level ?? 1;
   const rankRoman = escapeHtml(report?.rank?.rankRoman ?? 'I');
-  const rankName = escapeHtml(report?.rank?.rankName ?? 'Explorer');
+  const rankName = escapeHtml(report?.rank?.rankName ?? 'Pathfinder');
+  const rankTier = Number(report?.rank?.rankTier) || 0;
+  const rankTierLabel = rankTier > 0
+    ? escapeHtml(strings.rankTierLabel.replace('{n}', String(rankTier)))
+    : '';
   const progress = report?.rank?.levelProgressPercent ?? 0;
   const xpInLevel = report?.rank?.xpInCurrentLevel ?? 0;
   const xpNeeded = report?.rank?.xpNeededForLevel ?? 1;
+  const romanLine = rankTierLabel
+    ? `${rankRoman}<span style="font-size:22px; color:${COLORS.textMuted}; font-weight:700;"> · </span>${rankTierLabel}`
+    : rankRoman;
 
   const body = `
     <p style="margin:0 0 4px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:${COLORS.textMuted}; font-weight:700;">${strings.rankLevelLabel}</p>
     <p style="margin:0 0 4px; font-size:36px; font-weight:900; color:${COLORS.rankGold}; line-height:1; letter-spacing:-0.03em;">
-      ${rankRoman}<span style="font-size:22px; color:${COLORS.textMuted}; font-weight:700;"> · </span>Lv.${level}
+      ${romanLine}<span style="font-size:22px; color:${COLORS.textMuted}; font-weight:700;"> · </span>Lv.${level}
     </p>
     <p style="margin:0 0 14px; font-size:14px; color:${COLORS.text}; font-weight:700;">${rankName}</p>
     ${buildProgressBarHtml(progress, COLORS.rankGold)}
@@ -370,6 +377,7 @@ function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl, unsubsc
       sparksBalanceLabel: 'Текущий баланс',
       rankTitle: 'Ранг',
       rankLevelLabel: 'Ваш уровень',
+      rankTierLabel: 'Тир {n}',
       cta: 'Открыть Ignite',
       footer: `© ${copyrightYear} Ignite. Вы получили это письмо, потому что включили «Еженедельную летопись» в настройках профиля.`,
       unsubscribe: 'Отписаться от Legend Chronicle'
@@ -387,6 +395,7 @@ function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl, unsubsc
       sparksBalanceLabel: 'Current balance',
       rankTitle: 'Rank',
       rankLevelLabel: 'Your level',
+      rankTierLabel: 'Tier {n}',
       cta: 'Open Ignite',
       footer: `© ${copyrightYear} Ignite. You received this email because weekly chronicle is enabled in your profile settings.`,
       unsubscribe: 'Unsubscribe from Legend Chronicle'
@@ -405,7 +414,11 @@ function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl, unsubsc
   const sparksBalance = report?.sparks?.currentBalance ?? 0;
   const level = report?.rank?.level ?? 1;
   const rankRoman = report?.rank?.rankRoman ?? 'I';
-  const rankName = report?.rank?.rankName ?? 'Explorer';
+  const rankName = report?.rank?.rankName ?? 'Pathfinder';
+  const rankTier = Number(report?.rank?.rankTier) || 0;
+  const rankTierPlain = rankTier > 0
+    ? strings.rankTierLabel.replace('{n}', String(rankTier))
+    : '';
   const rankProgress = report?.rank?.levelProgressPercent ?? 0;
 
   const ritualsLine = ritualsScheduled > 0
@@ -525,7 +538,7 @@ function getWeeklyChronicleEmailContent(report, { appUrl, year, logoUrl, unsubsc
     '',
     `${strings.sparksTitle}: +${sparksEarned} ${language === 'ru' ? 'за неделю' : 'this week'}, ${language === 'ru' ? 'баланс' : 'balance'} ${sparksBalance}.`,
     '',
-    `${strings.rankTitle}: Lv.${level} · ${rankRoman} (${rankName}) · ${rankProgress}% ${language === 'ru' ? 'до след. уровня' : 'to next level'}.`,
+    `${strings.rankTitle}: Lv.${level} · ${rankRoman}${rankTierPlain ? ` · ${rankTierPlain}` : ''} (${rankName}) · ${rankProgress}% ${language === 'ru' ? 'до след. уровня' : 'to next level'}.`,
     '',
     `${strings.cta}: ${loginUrl}`,
     '',
