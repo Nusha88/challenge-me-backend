@@ -15,7 +15,9 @@ const MESSAGES = {
     dailyRecapBodies: [
       "Today's missions are still active. Shall we make a final push?",
       "Only a little remains to complete today's plan."
-    ]
+    ],
+    pushFriendRequestTitle: 'Squad request',
+    pushFriendRequestBody: '{fromName} wants to join your squad'
   },
   ru: {
     someone: 'Кто-то',
@@ -28,7 +30,9 @@ const MESSAGES = {
     dailyRecapBodies: [
       'Миссии дня еще активны. Сделаем финальный рывок?',
       'До завершения сегодняшнего плана осталось совсем немного.'
-    ]
+    ],
+    pushFriendRequestTitle: 'Заявка в отряд',
+    pushFriendRequestBody: '{fromName} хочет вступить в твой отряд'
   }
 };
 
@@ -66,6 +70,18 @@ function getLocalizedCommentPush(type, fromName, missionTitle, language, isReply
   };
 }
 
+function getLocalizedFriendRequestPush(fromName, language) {
+  const strings = MESSAGES[resolveLanguage(language)];
+  const name = fromName || strings.someone;
+  return {
+    title: strings.pushFriendRequestTitle || MESSAGES.en.pushFriendRequestTitle,
+    body: (strings.pushFriendRequestBody || MESSAGES.en.pushFriendRequestBody).replace(
+      /\{fromName\}/g,
+      name
+    )
+  };
+}
+
 function getLocalizedDailyRecap(language) {
   const strings = MESSAGES[resolveLanguage(language)];
   const bodies = strings.dailyRecapBodies || MESSAGES.en.dailyRecapBodies;
@@ -79,6 +95,7 @@ function getLocalizedDailyRecap(language) {
 
 module.exports = {
   getLocalizedCommentPush,
+  getLocalizedFriendRequestPush,
   getLocalizedDailyRecap,
   MESSAGES
 };

@@ -1,7 +1,7 @@
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { sendPushNotification } = require('./pushService');
-const { getLocalizedCommentPush, getLocalizedDailyRecap } = require('./notificationMessages');
+const { getLocalizedCommentPush, getLocalizedDailyRecap, getLocalizedFriendRequestPush } = require('./notificationMessages');
 
 async function createNotificationWithPush({
   userId,
@@ -174,6 +174,53 @@ async function sendDailyRecapNotification(user, localDate) {
   }
 }
 
+async function notifyFriendRequest({ recipientId, fromUserId, friendshipId }) {
+  if (!recipientId || !fromUserId || !friendshipId) return;
+  if (recipientId.toString() === fromUserId.toString()) return;
+
+  try {
+    const existing = await Notification.findOne({
+      userId: recipientId,
+      fromUserId,
+      type: 'friend_request',
+      read: false
+    }).select('_id').lean();
+    if (existing) return;
+
+    const [fromUser, recipientUser] = await Promise.all([
+      User.findById(fromUserId).select('name'),
+      User.findById(recipientId).select('dailyRecapLanguage')
+    ]);
+    const { title, body } = getLocalizedFriendRequestPush(
+      fromUser?.name,
+      recipientUser?.dailyRecapLanguage
+    );
+
+    await createNotificationWithPush({
+      userId: recipientId,
+      type: 'friend_request',
+      notificationFields: {
+        fromUserId,
+        friendshipId,
+        title,
+        body
+      },
+      push: {
+        title,
+        body,
+        tag: `friend-request-${fromUserId}`,
+        data: {
+          type: 'friend_request',
+          fromUserId: fromUserId.toString(),
+          friendshipId: friendshipId.toString()
+        }
+      }
+    });
+  } catch (notificationError) {
+    console.error('Error creating friend request notification:', notificationError);
+  }
+}
+
 async function notifyReferralCompleted({ referrerId, refereeId, refereeName }) {
   if (!referrerId || !refereeId) return;
 
@@ -210,5 +257,6 @@ module.exports = {
   notifyChallengeJoin,
   notifyChallengeWatch,
   sendDailyRecapNotification,
+  notifyFriendRequest,
   notifyReferralCompleted
 };

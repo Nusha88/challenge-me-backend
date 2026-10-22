@@ -11,6 +11,7 @@ const pushRoutes = require('./routes/push');
 const uploadRoutes = require('./routes/uploads');
 const adminRoutes = require('./routes/admin');
 const shopRoutes = require('./routes/shop');
+const friendsRoutes = require('./routes/friends');
 const { startDailyRecapScheduler } = require('./utils/dailyRecapScheduler');
 const { startWeeklyChronicleScheduler } = require('./utils/weeklyChronicleScheduler');
 const { startReactivationScheduler } = require('./utils/reactivationScheduler');
@@ -136,6 +137,7 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/push', pushRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/shop', shopRoutes);
+app.use('/api/friends', friendsRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

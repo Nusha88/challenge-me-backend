@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Challenge = require('../models/Challenge');
 const Notification = require('../models/Notification');
 const Referral = require('../models/Referral');
+const Friendship = require('../models/Friendship');
 const DailyChecklist = require('../models/DailyChecklist');
 const { isSuperAdminUserId } = require('../constants/superAdmin');
 
@@ -58,7 +59,12 @@ async function deleteUserFromSystem(userId) {
     { $set: { referredBy: null } }
   );
 
-  await Notification.deleteMany({ userId: userObjectId });
+  await Notification.deleteMany({
+    $or: [{ userId: userObjectId }, { fromUserId: userObjectId }]
+  });
+  await Friendship.deleteMany({
+    $or: [{ userA: userObjectId }, { userB: userObjectId }]
+  });
   await Referral.deleteMany({
     $or: [{ referrerId: userObjectId }, { refereeId: userObjectId }]
   });
