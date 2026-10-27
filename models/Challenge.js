@@ -23,6 +23,10 @@ const challengeSchema = new mongoose.Schema(
       enum: ['public', 'private'],
       default: 'public'
     },
+    inviteOnly: {
+      type: Boolean,
+      default: false
+    },
     visibility: {
       type: Boolean,
       default: true
@@ -156,6 +160,24 @@ const challengeSchema = new mongoose.Schema(
           type: String,
           enum: ['perfect', 'bright', 'sustained', 'extinguished', null],
           default: null
+        }
+      }
+    ],
+    invites: [
+      {
+        userId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true
+        },
+        invitedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now
         }
       }
     ],
@@ -340,6 +362,7 @@ challengeSchema.index({ privacy: 1, createdAt: -1 });
 challengeSchema.index({ owner: 1, createdAt: -1 });
 challengeSchema.index({ challengeType: 1, privacy: 1 });
 challengeSchema.index({ 'participants.userId': 1 });
+challengeSchema.index({ 'invites.userId': 1 });
 challengeSchema.index({ challengeType: 1, 'participants.userId': 1 });
 challengeSchema.index({ startDate: 1 });
 challengeSchema.index({ endDate: 1 });

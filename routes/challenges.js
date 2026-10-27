@@ -28,6 +28,17 @@ const {
   notifyChallengeJoin,
   notifyChallengeWatch
 } = require('../utils/notificationService');
+const {
+  sendInvites,
+  inviteUsers,
+  acceptInvite,
+  rejectInvite,
+  cancelInvite
+} = require('../utils/missionInviteService');
+const {
+  canViewInviteOnlyChallenge,
+  isChallengeOwner
+} = require('../utils/missionInviteHelpers');
 const { getWelcomeBonusRewardPayload } = require('../utils/referralService');
 const {
   awardHabitDayXp,
@@ -70,6 +81,7 @@ const {
 const { buildWatchedFeedActivities } = require('../utils/watchedFeedService');
 const { clearReactivationStreakFlag } = require('../utils/reactivationService');
 const { awardUserStreakMilestones } = require('../utils/userStreak');
+const { recordHabitProgressChronicle } = require('../utils/chronicleService');
 
 async function appendStreakMilestoneRewards(req, userId, xpResults, sparksResults, updatedUser) {
   const streakUser = await User.findById(userId);
@@ -363,7 +375,7 @@ function isChallengeCompleted(challenge, today) {
 // Create challenge
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward, templateId } = req.body;
+    const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward, templateId, inviteOnly, inviteUserIds } = req.body;
     // Owner is always the authenticated user, never taken from the body.
     const owner = req.user.id;
 
@@ -394,8 +406,17 @@ router.post('/', authenticateToken, async (req, res) => {
     if (challengeType) {
       challengeData.challengeType = challengeType;
     }
+    const wantsSquad = Boolean(inviteOnly);
+    if (wantsSquad) {
+      if (challengeType && challengeType !== 'habit') {
+        return res.status(400).json({ message: 'Squad missions can only be rituals', reason: 'not_a_ritual' });
+      }
+      challengeData.challengeType = 'habit';
+      challengeData.privacy = 'private';
+      challengeData.inviteOnly = true;
+    }
     // Only set frequency for habit challenges, don't include it for result challenges
-    if (challengeType === 'habit' && frequency) {
+    if ((challengeType === 'habit' || wantsSquad) && frequency) {
       challengeData.frequency = frequency;
     }
     // Explicitly don't set frequency for result challenges
@@ -415,11 +436,25 @@ router.post('/', authenticateToken, async (req, res) => {
     const challenge = new Challenge(challengeData);
     await challenge.save();
 
+    if (challenge.inviteOnly && Array.isArray(inviteUserIds) && inviteUserIds.length > 0) {
+      try {
+        await sendInvites(challenge, owner, inviteUserIds, {
+          joinDate: new Date(startDate)
+        });
+      } catch (inviteError) {
+        console.error('Error sending squad invites:', inviteError);
+      }
+    }
+
     const welcomeBonusPayload = await getWelcomeBonusRewardPayload(owner, serializeUserForClient);
+    const createdChallenge = await Challenge.findById(challenge._id)
+      .populate('owner', 'name avatarUrl')
+      .populate('participants.userId', 'name avatarUrl')
+      .populate('invites.userId', 'name avatarUrl');
 
     res.status(201).json({
       message: 'Challenge created successfully',
-      challenge,
+      challenge: createdChallenge,
       ...welcomeBonusPayload
     });
   } catch (error) {
@@ -833,6 +868,7 @@ router.post('/:id/end-habit-mission', authenticateToken, async (req, res) => {
 
     const userSelect = 'name email avatarUrl createdAt _id xp sparks';
     let updatedUser = await User.findById(authUserId).select(userSelect);
+    const prevXp = Number(updatedUser?.xp) || 0;
     const xpResults = [];
     const sparksResults = [];
 
@@ -894,6 +930,17 @@ router.post('/:id/end-habit-mission', authenticateToken, async (req, res) => {
       user: serializeUserForClient(updatedUser),
       xpResults,
       sparksResults
+    });
+
+    void recordHabitProgressChronicle({
+      actorId: authUserId,
+      challenge,
+      addedDays,
+      todayKey: clientDayStr,
+      prevXp,
+      nextXp: Number(updatedUser?.xp) || 0,
+      xpResults,
+      ritualComplete: true
     });
 
     const populatedChallenge = await Challenge.findById(id)
@@ -1192,6 +1239,12 @@ router.post('/:id/join', authenticateToken, async (req, res) => {
     if (challenge.challengeType !== 'habit') {
       return res.status(400).json({ message: 'Only habit challenges can be joined' });
     }
+    if (challenge.inviteOnly) {
+      return res.status(403).json({
+        message: 'This squad ritual is invite-only',
+        reason: 'invite_only'
+      });
+    }
 
     // Atomic add: the $ne guard in the filter makes concurrent joins for the
     // same user match at most once, so no duplicate participants can appear.
@@ -1262,6 +1315,64 @@ router.post('/:id/leave', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error leaving challenge:', error);
     res.status(500).json({ message: 'Error leaving challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
+  }
+});
+
+const INVITE_ERROR_MESSAGES = {
+  forbidden: 'Forbidden',
+  not_a_ritual: 'Squad missions can only be rituals',
+  not_invite_only: 'This mission is not a squad ritual',
+  challenge_not_found: 'Challenge not found',
+  invite_not_found: 'Invite not found',
+  invalid_challenge: 'Invalid challenge',
+  invalid_user: 'Invalid user'
+};
+
+function sendInviteError(res, error) {
+  const status = error.status || 500;
+  if (status >= 500) {
+    console.error('Mission invite error:', error);
+  }
+  return res.status(status).json({
+    message: INVITE_ERROR_MESSAGES[error.reason] || 'Unable to update squad invite',
+    reason: error.reason || 'unknown'
+  });
+}
+
+router.post('/:id/invites', authenticateToken, async (req, res) => {
+  try {
+    const challenge = await inviteUsers(req.params.id, req.user.id, req.body?.userIds);
+    res.json({ challenge });
+  } catch (error) {
+    sendInviteError(res, error);
+  }
+});
+
+router.post('/:id/invites/accept', authenticateToken, async (req, res) => {
+  try {
+    const { startUtc: joinDate } = getClientDayRange(req, 0);
+    const challenge = await acceptInvite(req.params.id, req.user.id, joinDate);
+    res.json({ challenge });
+  } catch (error) {
+    sendInviteError(res, error);
+  }
+});
+
+router.post('/:id/invites/reject', authenticateToken, async (req, res) => {
+  try {
+    await rejectInvite(req.params.id, req.user.id);
+    res.json({ status: 'none' });
+  } catch (error) {
+    sendInviteError(res, error);
+  }
+});
+
+router.delete('/:id/invites/:userId', authenticateToken, async (req, res) => {
+  try {
+    const challenge = await cancelInvite(req.params.id, req.user.id, req.params.userId);
+    res.json({ challenge });
+  } catch (error) {
+    sendInviteError(res, error);
   }
 });
 
@@ -1881,6 +1992,7 @@ router.put('/:id/participant/:userId/completedDays', authenticateToken, async (r
 
     const userSelect = 'name email avatarUrl createdAt _id xp sparks';
     let updatedUser = await User.findById(userId).select(userSelect);
+    const prevXp = Number(updatedUser?.xp) || 0;
     const xpResults = [];
     const sparksResults = [];
 
@@ -1907,6 +2019,16 @@ router.put('/:id/participant/:userId/completedDays', authenticateToken, async (r
         updatedUser
       );
     }
+
+    void recordHabitProgressChronicle({
+      actorId: userId,
+      challenge,
+      addedDays,
+      todayKey,
+      prevXp,
+      nextXp: Number(updatedUser?.xp) || 0,
+      xpResults
+    });
 
     const rewardPayload = buildRewardPayload({
       user: serializeUserForClient(updatedUser),
@@ -2128,7 +2250,8 @@ router.get('/:id', async (req, res) => {
     const [challenge, watchersCount, viewer] = await Promise.all([
       Challenge.findById(id)
         .populate('owner', 'name avatarUrl')
-        .populate('participants.userId', 'name avatarUrl'),
+        .populate('participants.userId', 'name avatarUrl')
+        .populate('invites.userId', 'name avatarUrl'),
       User.countDocuments({ watchedChallenges: id }),
       viewerUserId
         ? User.findById(viewerUserId).select('watchedChallenges').lean()
@@ -2144,8 +2267,25 @@ router.get('/:id', async (req, res) => {
     if (challenge.visibility === false && !isOwner) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
+    if (challenge.inviteOnly && !canViewInviteOnlyChallenge(challenge, viewerUserId)) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
     
     const challengeObj = challenge.toObject();
+    if (challenge.inviteOnly && !isChallengeOwner(challenge, viewerUserId)) {
+      challengeObj.invites = (challengeObj.invites || []).filter((row) => {
+        const inviteeId = row?.userId?._id || row?.userId;
+        return String(inviteeId) === String(viewerUserId);
+      });
+    }
+    challengeObj.isPendingInvite = Boolean(
+      challenge.inviteOnly
+      && viewerUserId
+      && (challengeObj.invites || []).some((row) => {
+        const inviteeId = row?.userId?._id || row?.userId;
+        return String(inviteeId) === String(viewerUserId);
+      })
+    );
     challengeObj.watchersCount = watchersCount;
     challengeObj.isWatched = viewerUserId
       ? (viewer?.watchedChallenges || []).some((cid) => String(cid) === String(id))

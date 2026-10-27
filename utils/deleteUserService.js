@@ -5,6 +5,8 @@ const Notification = require('../models/Notification');
 const Referral = require('../models/Referral');
 const Friendship = require('../models/Friendship');
 const DailyChecklist = require('../models/DailyChecklist');
+const Activity = require('../models/Activity');
+const ActivityCheer = require('../models/ActivityCheer');
 const { isSuperAdminUserId } = require('../constants/superAdmin');
 
 async function deleteUserFromSystem(userId) {
@@ -44,6 +46,11 @@ async function deleteUserFromSystem(userId) {
   );
 
   await Challenge.updateMany(
+    { 'invites.userId': userObjectId },
+    { $pull: { invites: { userId: userObjectId } } }
+  );
+
+  await Challenge.updateMany(
     {},
     {
       $pull: {
@@ -69,6 +76,15 @@ async function deleteUserFromSystem(userId) {
     $or: [{ referrerId: userObjectId }, { refereeId: userObjectId }]
   });
   await DailyChecklist.deleteMany({ userId: userObjectId });
+
+  const activityIds = await Activity.find({ actorId: userObjectId }).distinct('_id');
+  await ActivityCheer.deleteMany({
+    $or: [
+      { fromUserId: userObjectId },
+      { activityId: { $in: activityIds } }
+    ]
+  });
+  await Activity.deleteMany({ actorId: userObjectId });
 
   await User.findByIdAndDelete(userObjectId);
 

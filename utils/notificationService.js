@@ -1,7 +1,7 @@
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { sendPushNotification } = require('./pushService');
-const { getLocalizedCommentPush, getLocalizedDailyRecap, getLocalizedFriendRequestPush } = require('./notificationMessages');
+const { getLocalizedCommentPush, getLocalizedDailyRecap, getLocalizedFriendRequestPush, getLocalizedMissionInvitePush, getLocalizedCheerPush } = require('./notificationMessages');
 
 async function createNotificationWithPush({
   userId,
@@ -221,6 +221,95 @@ async function notifyFriendRequest({ recipientId, fromUserId, friendshipId }) {
   }
 }
 
+async function notifyMissionInvite({ recipientId, fromUserId, challenge }) {
+  if (!recipientId || !fromUserId || !challenge?._id) return;
+  if (recipientId.toString() === fromUserId.toString()) return;
+
+  try {
+    const existing = await Notification.findOne({
+      userId: recipientId,
+      challengeId: challenge._id,
+      type: 'mission_invite',
+      read: false
+    }).select('_id').lean();
+    if (existing) return;
+
+    const [fromUser, recipientUser] = await Promise.all([
+      User.findById(fromUserId).select('name'),
+      User.findById(recipientId).select('dailyRecapLanguage')
+    ]);
+    const { title, body } = getLocalizedMissionInvitePush(
+      fromUser?.name,
+      challenge.title,
+      recipientUser?.dailyRecapLanguage
+    );
+
+    await createNotificationWithPush({
+      userId: recipientId,
+      type: 'mission_invite',
+      notificationFields: {
+        fromUserId,
+        challengeId: challenge._id,
+        title,
+        body
+      },
+      push: {
+        title,
+        body,
+        tag: `mission-invite-${challenge._id}`,
+        data: {
+          type: 'mission_invite',
+          challengeId: challenge._id.toString(),
+          fromUserId: fromUserId.toString()
+        }
+      }
+    });
+  } catch (notificationError) {
+    console.error('Error creating mission invite notification:', notificationError);
+  }
+}
+
+async function notifyCheer({ recipientId, fromUserId, challengeId = null, activityId = null }) {
+  if (!recipientId || !fromUserId) return;
+  if (recipientId.toString() === fromUserId.toString()) return;
+
+  try {
+    const [fromUser, recipientUser] = await Promise.all([
+      User.findById(fromUserId).select('name'),
+      User.findById(recipientId).select('dailyRecapLanguage')
+    ]);
+    const { title, body } = getLocalizedCheerPush(
+      fromUser?.name,
+      recipientUser?.dailyRecapLanguage
+    );
+    const challengeObjectId = challengeId?._id || challengeId || null;
+    const activityKey = activityId?._id || activityId || fromUserId;
+
+    await createNotificationWithPush({
+      userId: recipientId,
+      type: 'cheer',
+      notificationFields: {
+        fromUserId,
+        challengeId: challengeObjectId,
+        title,
+        body
+      },
+      push: {
+        title,
+        body,
+        tag: `cheer-${activityKey}`,
+        data: {
+          type: 'cheer',
+          fromUserId: fromUserId.toString(),
+          ...(challengeObjectId ? { challengeId: challengeObjectId.toString() } : {})
+        }
+      }
+    });
+  } catch (notificationError) {
+    console.error('Error creating cheer notification:', notificationError);
+  }
+}
+
 async function notifyReferralCompleted({ referrerId, refereeId, refereeName }) {
   if (!referrerId || !refereeId) return;
 
@@ -258,5 +347,7 @@ module.exports = {
   notifyChallengeWatch,
   sendDailyRecapNotification,
   notifyFriendRequest,
+  notifyMissionInvite,
+  notifyCheer,
   notifyReferralCompleted
 };

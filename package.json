@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",
-    "test": "node utils/dailyProgress.test.js && node utils/watchedFeedService.test.js && node utils/usersListService.test.js && node utils/missionTierService.test.js && node utils/levelSystem.test.js && node utils/friendshipHelpers.test.js",
+    "test": "node utils/dailyProgress.test.js && node utils/watchedFeedService.test.js && node utils/usersListService.test.js && node utils/missionTierService.test.js && node utils/levelSystem.test.js && node utils/friendshipHelpers.test.js && node utils/missionInviteHelpers.test.js && node utils/chronicleHelpers.test.js",
     "simulate:rituals": "node scripts/simulate-daily-rituals.js",
     "simulate:rituals:dry": "node scripts/simulate-daily-rituals.js --dry-run"
   },

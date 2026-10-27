@@ -69,6 +69,30 @@ router.get('/:userId/unread-count', authenticateToken, async (req, res) => {
   }
 });
 
+router.delete('/:userId/daily-recap', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!assertSelf(req, res, userId)) return;
+
+    const normalizedUserId = normalizeUserId(userId);
+    if (!normalizedUserId) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+
+    const result = await Notification.deleteMany({
+      userId: normalizedUserId,
+      type: 'daily_recap'
+    });
+
+    res.json({ deletedCount: result.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({
+      message: 'Error clearing daily recap notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // Mark notification as read
 router.put('/:id/read', authenticateToken, async (req, res) => {
   try {

@@ -17,7 +17,11 @@ const MESSAGES = {
       "Only a little remains to complete today's plan."
     ],
     pushFriendRequestTitle: 'Squad request',
-    pushFriendRequestBody: '{fromName} wants to join your squad'
+    pushFriendRequestBody: '{fromName} wants to join your squad',
+    pushMissionInviteTitle: 'Squad ritual',
+    pushMissionInviteBody: '{fromName} invited you to “{missionTitle}”',
+    pushCheerTitle: 'Chronicle',
+    pushCheerBody: '{fromName} ignited your chronicle'
   },
   ru: {
     someone: 'Кто-то',
@@ -32,7 +36,11 @@ const MESSAGES = {
       'До завершения сегодняшнего плана осталось совсем немного.'
     ],
     pushFriendRequestTitle: 'Заявка в отряд',
-    pushFriendRequestBody: '{fromName} хочет вступить в твой отряд'
+    pushFriendRequestBody: '{fromName} хочет вступить в твой отряд',
+    pushMissionInviteTitle: 'Ритуал отряда',
+    pushMissionInviteBody: '{fromName} приглашает тебя в «{missionTitle}»',
+    pushCheerTitle: 'Хроника',
+    pushCheerBody: '{fromName} разжёг твою хронику'
   }
 };
 
@@ -82,6 +90,29 @@ function getLocalizedFriendRequestPush(fromName, language) {
   };
 }
 
+function getLocalizedCheerPush(fromName, language) {
+  const strings = MESSAGES[resolveLanguage(language)];
+  const name = fromName || strings.someone;
+  return {
+    title: strings.pushCheerTitle || MESSAGES.en.pushCheerTitle,
+    body: (strings.pushCheerBody || MESSAGES.en.pushCheerBody).replace(/\{fromName\}/g, name)
+  };
+}
+
+function getLocalizedMissionInvitePush(fromName, missionTitle, language) {
+  const strings = MESSAGES[resolveLanguage(language)];
+  const name = fromName || strings.someone;
+  const title = missionTitle || strings.defaultMission;
+  return {
+    title: strings.pushMissionInviteTitle || MESSAGES.en.pushMissionInviteTitle,
+    body: formatMessage(
+      strings.pushMissionInviteBody || MESSAGES.en.pushMissionInviteBody,
+      name,
+      title
+    )
+  };
+}
+
 function getLocalizedDailyRecap(language) {
   const strings = MESSAGES[resolveLanguage(language)];
   const bodies = strings.dailyRecapBodies || MESSAGES.en.dailyRecapBodies;
@@ -96,6 +127,8 @@ function getLocalizedDailyRecap(language) {
 module.exports = {
   getLocalizedCommentPush,
   getLocalizedFriendRequestPush,
+  getLocalizedMissionInvitePush,
+  getLocalizedCheerPush,
   getLocalizedDailyRecap,
   MESSAGES
 };
