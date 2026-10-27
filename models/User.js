@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 
-// Check if the model already exists to prevent model overwrite error
-const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema({
+const userSchema = new mongoose.Schema({
   name: {
     type: String,
     required: true,
@@ -9,10 +8,11 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
   },
   email: {
     type: String,
-    required: true,
+    required: false,
     trim: true,
     lowercase: true,
     unique: true,
+    sparse: true,
     match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email address']
   },
   avatarUrl: {
@@ -21,8 +21,26 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
   },
   password: {
     type: String,
-    required: true,
+    required: false,
     minlength: 6
+  },
+  identities: {
+    type: [{
+      provider: {
+        type: String,
+        enum: ['google', 'telegram'],
+        required: true
+      },
+      providerId: {
+        type: String,
+        required: true
+      },
+      linkedAt: {
+        type: Date,
+        default: Date.now
+      }
+    }],
+    default: []
   },
   watchedChallenges: {
     type: [mongoose.Schema.Types.ObjectId],
@@ -203,6 +221,23 @@ const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema(
     type: Date,
     default: Date.now
   }
-}));
+});
+
+userSchema.pre('validate', function clearEmptyAuthFields(next) {
+  if (!this.email) this.email = undefined;
+  if (!this.password) this.password = undefined;
+  next();
+});
+
+userSchema.set('toJSON', {
+  transform(_doc, ret) {
+    delete ret.password;
+    delete ret.resetPasswordToken;
+    delete ret.resetPasswordExpires;
+    return ret;
+  }
+});
+
+const User = mongoose.models.User || mongoose.model('User', userSchema);
 
 module.exports = User; 

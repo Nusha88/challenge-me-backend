@@ -13,11 +13,15 @@ function serializeUserForClient(user) {
   const payload = {
     id: user._id,
     name: user.name,
-    email: user.email,
+    email: user.email || '',
     avatarUrl: user.avatarUrl,
     xp: user.xp || 0,
     sparks: user.sparks || 0,
-    createdAt: user.createdAt
+    createdAt: user.createdAt,
+    providers: Array.isArray(user.identities)
+      ? user.identities.map((item) => item.provider).filter(Boolean)
+      : [],
+    hasPassword: Boolean(user.password)
   };
 
   const inventory = serializeInventory(user);

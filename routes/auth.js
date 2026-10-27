@@ -15,6 +15,24 @@ const crypto = require('crypto');
 const { buildWeeklyChronicleReport, resolveUserReportLanguage } = require('../utils/weeklyChronicleReport');
 const { registerRateLimiter, authRateLimiter } = require('../middleware/registerRateLimiter');
 const authenticateToken = require('../middleware/authenticateToken');
+const { optionalAuth } = require('../middleware/authenticateToken');
+const passport = require('passport');
+const {
+  isGoogleConfigured,
+  isTelegramConfigured,
+  getTelegramBotId,
+  getTelegramBotUsername,
+  verifyTelegramAuth
+} = require('../utils/telegramAuth');
+const {
+  getFrontendUrl,
+  sanitizeRedirect,
+  signOAuthState,
+  authPayload,
+  upsertSocialUser,
+  linkIdentityToUser,
+  pickTelegramProfile
+} = require('../utils/socialAuthService');
 const {
   verifyEmailUnsubscribeToken,
   EMAIL_UNSUBSCRIBE_TYPES
@@ -295,6 +313,102 @@ router.post('/login', authRateLimiter, async (req, res) => {
   }
 });
 
+router.get('/providers', (req, res) => {
+  res.json({
+    google: isGoogleConfigured(),
+    telegram: isTelegramConfigured(),
+    telegramBotId: isTelegramConfigured() ? getTelegramBotId() : null,
+    telegramBotUsername: isTelegramConfigured() ? getTelegramBotUsername() : ''
+  });
+});
+
+router.get('/google', authRateLimiter, (req, res, next) => {
+  if (!isGoogleConfigured()) {
+    return res.status(503).json({ message: 'Google sign-in is not configured' });
+  }
+  const state = signOAuthState({
+    referralCode: typeof req.query.referralCode === 'string' ? req.query.referralCode : '',
+    redirect: sanitizeRedirect(req.query.redirect),
+    demo: req.query.demo === '1' || req.query.demo === 'true'
+  });
+  return passport.authenticate('google', {
+    scope: ['profile', 'email'],
+    state,
+    session: false
+  })(req, res, next);
+});
+
+router.get('/google/callback', (req, res, next) => {
+  const frontend = getFrontendUrl();
+  if (!isGoogleConfigured()) {
+    return res.redirect(`${frontend}/login?error=google_unavailable`);
+  }
+  passport.authenticate('google', { session: false }, (err, result) => {
+    if (err || !result?.user) {
+      const code = err?.status === 403 ? 'disabled' : 'google';
+      return res.redirect(`${frontend}/login?error=${encodeURIComponent(code)}`);
+    }
+    const payload = authPayload(result.user, result.isNew, result.redirect);
+    const params = new URLSearchParams({
+      token: payload.token,
+      isNew: payload.isNew ? '1' : '0',
+      redirect: payload.redirect
+    });
+    return res.redirect(`${frontend}/auth/callback?${params.toString()}`);
+  })(req, res, next);
+});
+
+router.post('/telegram', authRateLimiter, optionalAuth, async (req, res) => {
+  try {
+    if (!isTelegramConfigured()) {
+      return res.status(503).json({ message: 'Telegram sign-in is not configured' });
+    }
+
+    const verification = verifyTelegramAuth(req.body, process.env.TELEGRAM_BOT_TOKEN);
+    if (!verification.ok) {
+      const message = verification.reason === 'expired'
+        ? 'Telegram login expired'
+        : 'Invalid Telegram login';
+      return res.status(401).json({ message });
+    }
+
+    const telegram = pickTelegramProfile(req.body);
+    const referralCode = typeof req.body.referralCode === 'string' ? req.body.referralCode : '';
+
+    if (req.user?.id) {
+      const user = await linkIdentityToUser(req.user.id, 'telegram', telegram.providerId, {
+        avatarUrl: telegram.avatarUrl
+      });
+      return res.json({
+        message: 'Telegram linked',
+        linked: true,
+        user: serializeUserForClient(user)
+      });
+    }
+
+    const result = await upsertSocialUser({
+      provider: 'telegram',
+      providerId: telegram.providerId,
+      name: telegram.name,
+      email: null,
+      emailVerified: false,
+      avatarUrl: telegram.avatarUrl,
+      referralCode
+    });
+    return res.json(authPayload(result.user, result.isNew, sanitizeRedirect(req.body.redirect)));
+  } catch (error) {
+    console.error('Telegram auth error:', error);
+    const status = error.status || (error?.code === 11000 ? 409 : 500);
+    const message = error.status
+      ? error.message
+      : (status === 409 ? 'This account is already linked to another hero' : 'Error signing in with Telegram');
+    return res.status(status).json({
+      message,
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // Get current user's profile (protected)
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
@@ -312,6 +426,8 @@ router.get('/profile', authenticateToken, async (req, res) => {
       inventory: 1,
       createdAt: 1,
       referredBy: 1,
+      identities: 1,
+      password: 1,
       _id: 1
     });
     if (!user) {

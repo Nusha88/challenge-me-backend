@@ -4,6 +4,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const passport = require('passport');
+const { registerGoogleStrategy } = require('./utils/googlePassport');
 const authRoutes = require('./routes/auth');
 const challengeRoutes = require('./routes/challenges');
 const notificationsRoutes = require('./routes/notifications');
@@ -31,6 +33,8 @@ if (!process.env.JWT_SECRET) {
 const app = express();
 
 app.set('trust proxy', 1);
+registerGoogleStrategy();
+app.use(passport.initialize());
 
 // CORS configuration
 const devOrigins = [
@@ -99,6 +103,21 @@ mongoose.connect(process.env.ATLAS_URI, {
   console.log('Host:', mongoose.connection.host);
   // Legacy cleanup: name is no longer unique, so drop old unique index if it exists.
   mongoose.connection.collection('users').dropIndex('name_1').catch(() => {});
+  // Social login allows users without email; the unique email index must be sparse
+  // or a second Telegram account cannot be saved.
+  const users = mongoose.connection.collection('users');
+  users.dropIndex('email_1')
+    .catch(() => {})
+    .then(() => users.createIndex({ email: 1 }, { unique: true, sparse: true, name: 'email_1' }))
+    .catch((error) => {
+      console.error('Failed to ensure sparse email index:', error.message);
+    });
+  users.createIndex(
+    { 'identities.provider': 1, 'identities.providerId': 1 },
+    { unique: true, sparse: true, name: 'identities_provider_providerId' }
+  ).catch((error) => {
+    console.error('Failed to ensure identities index:', error.message);
+  });
   startDailyRecapScheduler();
   startWeeklyChronicleScheduler();
   startReactivationScheduler();
