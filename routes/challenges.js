@@ -432,6 +432,9 @@ router.post('/', authenticateToken, async (req, res) => {
     if (allowComments !== undefined) {
       challengeData.allowComments = allowComments;
     }
+    if (wantsSquad) {
+      challengeData.allowComments = true;
+    }
 
     const challenge = new Challenge(challengeData);
     await challenge.save();
@@ -648,7 +651,7 @@ router.post('/:id/actions/:actionId/complete', authenticateToken, async (req, re
         createdAt: new Date()
       });
 
-      if (shareToCommunity === true && challenge.allowComments) {
+      if (shareToCommunity === true && (challenge.allowComments || challenge.inviteOnly)) {
         challenge.comments.push({
           userId: authUserId,
           text: reportText,
@@ -725,7 +728,7 @@ router.post('/:id/actions/:actionId/complete', authenticateToken, async (req, re
       await challenge.populate('userDiaryEntries.userId', 'name avatarUrl');
       entry = challenge.userDiaryEntries[challenge.userDiaryEntries.length - 1];
 
-      if (shareToCommunity === true && challenge.allowComments) {
+      if (shareToCommunity === true && (challenge.allowComments || challenge.inviteOnly)) {
         const sharedComment = challenge.comments[challenge.comments.length - 1];
         sharedCommentId = sharedComment?._id || null;
       }
@@ -1113,7 +1116,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
       update.actions = [];
     }
     
-    if (allowComments !== undefined) {
+    if (existingChallenge.inviteOnly) {
+      update.allowComments = true;
+    } else if (allowComments !== undefined) {
       update.allowComments = allowComments;
     }
 
@@ -2468,7 +2473,7 @@ router.post('/:id/comments', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    if (!challenge.allowComments) {
+    if (!challenge.allowComments && !challenge.inviteOnly) {
       return res.status(403).json({ message: 'Comments are disabled for this challenge' });
     }
 
@@ -2609,7 +2614,7 @@ router.post('/:id/comments/:commentId/reply', authenticateToken, async (req, res
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    if (!challenge.allowComments) {
+    if (!challenge.allowComments && !challenge.inviteOnly) {
       return res.status(403).json({ message: 'Comments are disabled for this challenge' });
     }
 
@@ -2759,7 +2764,7 @@ router.post('/:id/diary', authenticateToken, async (req, res) => {
 
     let sharedCommentId = null;
     const shouldShareToCommunity =
-      challenge.allowComments && (shareToCommunity === true || triumphEntry);
+      (challenge.allowComments || challenge.inviteOnly) && (shareToCommunity === true || triumphEntry);
 
     if (shouldShareToCommunity) {
       challenge.comments.push({
@@ -2837,7 +2842,7 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', authenticateToken
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    if (!challenge.allowComments) {
+    if (!challenge.allowComments && !challenge.inviteOnly) {
       return res.status(403).json({ message: 'Comments are disabled for this challenge' });
     }
 
