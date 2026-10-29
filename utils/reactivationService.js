@@ -130,7 +130,15 @@ async function processUserReactivation(user, now, habitChallenges) {
 
   user.reactivationEmailSentStreakKey = streakKey;
   user.reactivationEmailSentAt = now;
-  await user.save();
+  await User.updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        reactivationEmailSentStreakKey: streakKey,
+        reactivationEmailSentAt: now
+      }
+    }
+  );
 
   return { sent: true, streakKey, language };
 }

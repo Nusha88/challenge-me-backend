@@ -100,7 +100,10 @@ async function processUserWeeklyChronicle(user, now) {
   await sendWeeklyChronicleEmail(user.email, report, user._id);
 
   user.weeklyChronicleLastSentWeekKey = weekKey;
-  await user.save();
+  await User.updateOne(
+    { _id: user._id },
+    { $set: { weeklyChronicleLastSentWeekKey: weekKey } }
+  );
 }
 
 async function runWeeklyChronicleTick() {

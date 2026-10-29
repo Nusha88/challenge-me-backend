@@ -291,7 +291,10 @@ router.post('/login', authRateLimiter, async (req, res) => {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
     if (!user.password) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({
+        message: 'This account has no password. Use Forgot password to set one.',
+        reason: 'no_password'
+      });
     }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {

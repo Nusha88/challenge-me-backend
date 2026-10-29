@@ -76,7 +76,10 @@ async function processUserDailyRecap(user, now, challenges, checklistByUserAndDa
   await sendDailyRecapNotification(user, localDate);
 
   user.dailyRecapLastSentLocalDate = localDate;
-  await user.save();
+  await User.updateOne(
+    { _id: user._id },
+    { $set: { dailyRecapLastSentLocalDate: localDate } }
+  );
 }
 
 async function runDailyRecapTick() {

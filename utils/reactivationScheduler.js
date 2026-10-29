@@ -110,7 +110,10 @@ async function runReactivationTick() {
         console.error('[ReactivationEmail] Failed user tick:', user?._id?.toString(), error?.message || error);
       } finally {
         user.reactivationEmailLastCheckedLocalDate = localDate;
-        await user.save();
+        await User.updateOne(
+          { _id: user._id },
+          { $set: { reactivationEmailLastCheckedLocalDate: localDate } }
+        );
       }
     }
   } catch (error) {

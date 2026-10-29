@@ -224,8 +224,10 @@ const userSchema = new mongoose.Schema({
 });
 
 userSchema.pre('validate', function clearEmptyAuthFields(next) {
-  if (!this.email) this.email = undefined;
-  if (!this.password) this.password = undefined;
+  // Only rewrite empty strings. A missing field means it was not selected or
+  // never set — assigning undefined here would $unset password/email on save.
+  if (this.email === '') this.email = undefined;
+  if (this.password === '') this.password = undefined;
   next();
 });
 
