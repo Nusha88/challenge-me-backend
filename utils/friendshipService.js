@@ -2,7 +2,6 @@ const Friendship = require('../models/Friendship');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { notifyFriendRequest } = require('./notificationService');
-const { countUserChallenges } = require('./challengeHelpers');
 const {
   isValidUserId,
   toObjectId,
@@ -40,12 +39,6 @@ async function clearFriendRequestNotifications(doc) {
       { userId: doc.userB, fromUserId: doc.userA }
     ]
   });
-}
-
-async function attachChallengeCount(item) {
-  if (!item?.user?._id) return item;
-  item.user.challengeCount = await countUserChallenges(item.user._id, { includePrivate: true });
-  return item;
 }
 
 async function sendRequest(viewerId, targetId) {
@@ -136,9 +129,7 @@ async function listFriends(viewerId) {
     .sort({ updatedAt: -1 })
     .lean();
 
-  const friends = await Promise.all(
-    docs.map((doc) => attachChallengeCount(serializeFriendship(doc, viewerId)))
-  );
+  const friends = docs.map((doc) => serializeFriendship(doc, viewerId));
 
   return { friends };
 }

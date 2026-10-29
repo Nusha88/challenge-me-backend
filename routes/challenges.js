@@ -1587,223 +1587,228 @@ router.post('/:id/second-chance', authenticateToken, async (req, res) => {
   }
 });
 
+const WORLD_CHALLENGE_LIST_SELECT = [
+  'title',
+  'imageUrl',
+  'privacy',
+  'inviteOnly',
+  'visibility',
+  'challengeType',
+  'frequency',
+  'startDate',
+  'endDate',
+  'resultMissionEndedAt',
+  'createdAt',
+  'owner',
+  'templateId',
+  'participants.userId',
+  'participants.completedDays',
+  'participants.frozenDays',
+  'participants.secondChanceDays',
+  'participants.joinedAt',
+  'participants.habitMissionEndedAt',
+  'participants.completionTier',
+  'actions._id',
+  'actions.checked',
+  'actions.children._id',
+  'actions.children.checked'
+].join(' ');
+
+function notFinishedClauses(today) {
+  return [
+    {
+      $or: [
+        { endDate: { $exists: false } },
+        { endDate: null },
+        { endDate: { $gte: today } }
+      ]
+    },
+    {
+      $or: [
+        { challengeType: { $ne: 'result' } },
+        { resultMissionEndedAt: { $exists: false } },
+        { resultMissionEndedAt: null }
+      ]
+    }
+  ];
+}
+
+function finishedClause(today) {
+  return {
+    $or: [
+      { endDate: { $lt: today } },
+      { challengeType: 'result', resultMissionEndedAt: { $exists: true, $ne: null } }
+    ]
+  };
+}
+
+function participantCountSize() {
+  return { $size: { $ifNull: ['$participants', []] } };
+}
+
+async function fetchWorldCatalogPage({ query, popularity, skip, limitNum }) {
+  if (popularity === 'most' || popularity === 'least') {
+    const direction = popularity === 'most' ? -1 : 1;
+    const [facet] = await Challenge.aggregate([
+      { $match: query },
+      { $addFields: { _participantCount: participantCountSize() } },
+      { $sort: { _participantCount: direction, createdAt: -1 } },
+      {
+        $facet: {
+          meta: [{ $count: 'total' }],
+          data: [
+            { $skip: skip },
+            { $limit: limitNum },
+            { $unset: ['_participantCount', 'comments', 'invites'] }
+          ]
+        }
+      }
+    ]);
+    return {
+      total: facet?.meta?.[0]?.total || 0,
+      challenges: facet?.data || []
+    };
+  }
+
+  const [total, challenges] = await Promise.all([
+    Challenge.countDocuments(query),
+    Challenge.find(query)
+      .select(WORLD_CHALLENGE_LIST_SELECT)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean()
+  ]);
+
+  return { total, challenges };
+}
+
 // Get all challenges
 router.get('/', async (req, res) => {
   try {
     const { excludeFinished, type, activity, participants, creationDate, page, limit, title, owner, createdBy, popularity, isCompleted } = req.query;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
-    // Pagination parameters
+
     const pageNum = parseInt(page) || 1;
     const limitNum = parseInt(limit) || 20;
     const skip = (pageNum - 1) * limitNum;
-    
-    let query = {};
-    
-    // Filter by type (challengeType)
+
+    const requestingUserId = decodeOptionalAuthUserId(req);
+    const query = {
+      privacy: { $ne: 'private' },
+      visibility: { $ne: false }
+    };
+    const extra = [];
+
     if (type && (type === 'habit' || type === 'result')) {
       query.challengeType = type;
     }
-    
-    // Filter by title (search)
+
     if (title && typeof title === 'string' && title.trim()) {
-      query.title = { $regex: escapeRegExp(title.trim()), $options: 'i' }; // Case-insensitive search
+      query.title = { $regex: escapeRegExp(title.trim()), $options: 'i' };
     }
 
-    // Filter by owner (createdBy is an alias for owner). Cast to string to
-    // prevent query-operator injection via ?owner[$ne]=...
     if (owner || createdBy) {
-      query.owner = String(owner || createdBy);
-    }
-    
-    // Filter by privacy - exclude private challenges
-    query.privacy = { $ne: 'private' };
-    // Legacy docs without visibility are treated as visible.
-    query.visibility = { $ne: false };
-
-    // On the public world board, template-based missions are shown as one
-    // shared card per template — not as individual user copies.
-    if (!owner && !createdBy) {
-      query.$or = [
-        { templateId: { $exists: false } },
-        { templateId: null },
-        { templateId: '' }
-      ];
-    }
-    
-    // Get all challenges first
-    let allChallenges = await Challenge.find(query)
-      .sort({ createdAt: -1 })
-      .populate('owner', 'name avatarUrl')
-      .populate('participants.userId', 'name avatarUrl');
-    
-    // Apply activity filter (active/finished/upcoming)
-    if (activity) {
-      allChallenges = allChallenges.filter(challenge => {
-        if (!challenge.startDate || !challenge.endDate) return false;
-        
-        const startDate = new Date(challenge.startDate);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(challenge.endDate);
-        endDate.setHours(0, 0, 0, 0);
-        
-        if (activity === 'active') {
-          return startDate <= today && endDate >= today;
-        } else if (activity === 'finished') {
-          // Check if challenge is finished
-          if (endDate < today) return true;
-          
-          // For result challenges, check if all actions are done
-          if (challenge.challengeType === 'result') {
-            if (!challenge.actions || !Array.isArray(challenge.actions) || challenge.actions.length === 0) {
-              return false;
-            }
-            return challenge.actions.every(action => {
-              if (!action.checked) return false;
-              if (action.children && Array.isArray(action.children) && action.children.length > 0) {
-                return action.children.every(child => child.checked);
-              }
-              return true;
-            });
-          }
-          return false;
-        } else if (activity === 'upcoming') {
-          return startDate > today;
-        }
-        return true;
+      const ownerId = String(owner || createdBy);
+      if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+        return res.json({
+          challenges: [],
+          pagination: { page: pageNum, limit: limitNum, total: 0, hasMore: false }
+        });
+      }
+      query.owner = ownerId;
+    } else {
+      extra.push({
+        $or: [
+          { templateId: { $exists: false } },
+          { templateId: null },
+          { templateId: '' }
+        ]
       });
     }
-    
-    // Apply isCompleted filter
-    // If isCompleted is not sent, exclude completed challenges by default
-    // If isCompleted is 'true', include only completed challenges
-    // If isCompleted is 'false', exclude completed challenges
-    // If isCompleted is 'all', include both active and completed
+
+    if (activity === 'active') {
+      extra.push({ startDate: { $lte: today }, endDate: { $gte: today } });
+    } else if (activity === 'upcoming') {
+      extra.push({ startDate: { $gt: today } });
+    } else if (activity === 'finished') {
+      extra.push(finishedClause(today));
+    }
+
     if (isCompleted !== undefined && isCompleted !== 'all') {
       const includeCompleted = isCompleted === 'true' || isCompleted === true;
-      allChallenges = allChallenges.filter(challenge => {
-        const completed = isChallengeCompleted(challenge, today);
-        return includeCompleted ? completed : !completed;
-      });
+      extra.push(...(includeCompleted ? [finishedClause(today)] : notFinishedClauses(today)));
     } else if (isCompleted === undefined) {
-      // Default behavior: exclude completed challenges if isCompleted is not specified
-      allChallenges = allChallenges.filter(challenge => {
-        return !isChallengeCompleted(challenge, today);
-      });
+      extra.push(...notFinishedClauses(today));
     }
-    
-    // Apply excludeFinished filter (if excludeFinished is true, filter out finished challenges)
-    // This is kept for backward compatibility but isCompleted takes precedence
+
     if (excludeFinished === 'true' && !activity && isCompleted === undefined) {
-      allChallenges = allChallenges.filter(challenge => {
-        // Check if endDate is in the past
-        if (challenge.endDate) {
-          try {
-            const endDate = new Date(challenge.endDate);
-            endDate.setHours(0, 0, 0, 0);
-            if (endDate < today) {
-              return false; // Exclude if endDate is in past
-            }
-          } catch (e) {
-            // Continue if date parsing fails
-          }
-        }
-        
-        // For result challenges, check if all actions are done
-        if (challenge.challengeType === 'result') {
-          if (!challenge.actions || !Array.isArray(challenge.actions) || challenge.actions.length === 0) {
-            return true; // Include if no actions
-          }
-          
-          // Check if all actions and their children are checked
-          const allActionsDone = challenge.actions.every(action => {
-            // Parent action must be checked
-            if (!action.checked) return false;
-            
-            // All children must be checked (if any exist)
-            if (action.children && Array.isArray(action.children) && action.children.length > 0) {
-              return action.children.every(child => child.checked);
-            }
-            
-            return true;
-          });
-          
-          if (allActionsDone) {
-            return false; // Exclude if all actions are done
-          }
-        }
-        
-        return true; // Include the challenge
+      extra.push(...notFinishedClauses(today));
+    }
+
+    if (!activity && isCompleted !== 'true' && isCompleted !== true) {
+      extra.push({
+        $or: [
+          { startDate: { $exists: false } },
+          { startDate: null },
+          { startDate: { $lte: today } },
+          ...(requestingUserId ? [{ owner: requestingUserId }] : [])
+        ]
       });
     }
-    
-    // Filter by participants count
-    if (participants) {
-      allChallenges = allChallenges.filter(challenge => {
-        const participantCount = (challenge.participants || []).length;
-        
-        if (participants === '0') {
-          return participantCount === 0;
-        } else if (participants === '1-5') {
-          return participantCount >= 1 && participantCount <= 5;
-        } else if (participants === '6+') {
-          return participantCount >= 6;
+
+    if (participants === '0') {
+      extra.push({ $expr: { $eq: [participantCountSize(), 0] } });
+    } else if (participants === '1-5') {
+      extra.push({
+        $expr: {
+          $and: [
+            { $gte: [participantCountSize(), 1] },
+            { $lte: [participantCountSize(), 5] }
+          ]
         }
-        return true;
       });
+    } else if (participants === '6+') {
+      extra.push({ $expr: { $gte: [participantCountSize(), 6] } });
     }
-    
-    // Filter by creation date
-    if (creationDate) {
-      allChallenges = allChallenges.filter(challenge => {
-        const creationDateValue = challenge.createdAt || challenge.startDate;
-        if (!creationDateValue) return false;
-        
-        const created = new Date(creationDateValue);
-        created.setHours(0, 0, 0, 0);
-        const daysDiff = Math.floor((today - created) / (1000 * 60 * 60 * 24));
-        
-        if (creationDate === 'today') {
-          return daysDiff === 0;
-        } else if (creationDate === 'week') {
-          return daysDiff >= 0 && daysDiff <= 7;
-        } else if (creationDate === 'month') {
-          return daysDiff >= 0 && daysDiff <= 30;
-        } else if (creationDate === 'older') {
-          return daysDiff > 30;
-        }
-        return true;
-      });
+
+    if (creationDate === 'today') {
+      extra.push({ createdAt: { $gte: today } });
+    } else if (creationDate === 'week') {
+      const weekAgo = new Date(today);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      extra.push({ createdAt: { $gte: weekAgo } });
+    } else if (creationDate === 'month') {
+      const monthAgo = new Date(today);
+      monthAgo.setDate(monthAgo.getDate() - 30);
+      extra.push({ createdAt: { $gte: monthAgo } });
+    } else if (creationDate === 'older') {
+      const monthAgo = new Date(today);
+      monthAgo.setDate(monthAgo.getDate() - 30);
+      extra.push({ createdAt: { $lt: monthAgo } });
     }
-    
-    // Sort by popularity if requested
-    if (popularity === 'most') {
-      // Sort by participant count descending (most popular first)
-      allChallenges.sort((a, b) => {
-        const countA = (a.participants || []).length;
-        const countB = (b.participants || []).length;
-        return countB - countA;
-      });
-    } else if (popularity === 'least') {
-      // Sort by participant count ascending (least popular first)
-      allChallenges.sort((a, b) => {
-        const countA = (a.participants || []).length;
-        const countB = (b.participants || []).length;
-        return countA - countB;
-      });
+
+    if (extra.length) {
+      query.$and = extra;
     }
-    
-    // Apply pagination
-    const totalChallenges = allChallenges.length;
-    const paginatedChallenges = allChallenges.slice(skip, skip + limitNum);
-    const hasMore = skip + limitNum < totalChallenges;
-    
-    const requestingUserId = decodeOptionalAuthUserId(req);
+
+    const { total, challenges } = await fetchWorldCatalogPage({
+      query,
+      popularity,
+      skip,
+      limitNum
+    });
+
     const challengesWithWatchers = await enrichChallengesWithWatchState(
-      paginatedChallenges,
+      challenges,
       requestingUserId,
-      User
+      User,
+      {
+        includeWatchersCount: false,
+        includeWatchState: true,
+        includeReactions: false
+      }
     );
 
     res.json({
@@ -1811,8 +1816,8 @@ router.get('/', async (req, res) => {
       pagination: {
         page: pageNum,
         limit: limitNum,
-        total: totalChallenges,
-        hasMore
+        total,
+        hasMore: skip + limitNum < total
       }
     });
   } catch (error) {
@@ -2052,10 +2057,37 @@ router.put('/:id/participant/:userId/completedDays', authenticateToken, async (r
 });
 
 // Get challenges by user
+const USER_CHALLENGE_LIST_SELECT = [
+  'title',
+  'imageUrl',
+  'privacy',
+  'inviteOnly',
+  'visibility',
+  'challengeType',
+  'frequency',
+  'startDate',
+  'endDate',
+  'resultMissionEndedAt',
+  'createdAt',
+  'owner',
+  'participants.userId',
+  'participants.completedDays',
+  'participants.frozenDays',
+  'participants.secondChanceDays',
+  'participants.joinedAt',
+  'participants.habitMissionEndedAt',
+  'participants.completionTier',
+  'actions._id',
+  'actions.checked',
+  'actions.children._id',
+  'actions.children.checked'
+].join(' ');
+
 router.get('/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { excludePrivate, type, activity, participants, creationDate } = req.query;
+    const { excludePrivate, type, activity, participants, creationDate, view } = req.query;
+    const isListView = view === 'list';
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -2090,11 +2122,16 @@ router.get('/user/:userId', async (req, res) => {
       query.visibility = { $ne: false };
     }
 
-    // Get all challenges first
-    let allChallenges = await Challenge.find(query)
-      .sort({ createdAt: -1 })
-      .populate('owner', 'name avatarUrl')
-      .populate('participants.userId', 'name avatarUrl');
+    // Card lists skip comments, invites, and populated avatars.
+    let findQuery = Challenge.find(query).sort({ createdAt: -1 });
+    if (isListView) {
+      findQuery = findQuery.select(USER_CHALLENGE_LIST_SELECT).lean();
+    } else {
+      findQuery = findQuery
+        .populate('owner', 'name avatarUrl')
+        .populate('participants.userId', 'name avatarUrl');
+    }
+    let allChallenges = await findQuery;
 
     // Apply activity filter (active/finished/upcoming)
     if (activity) {
@@ -2175,7 +2212,10 @@ router.get('/user/:userId', async (req, res) => {
     const challengesWithWatchers = await enrichChallengesWithWatchState(
       allChallenges,
       requestingUserId,
-      User
+      User,
+      isListView
+        ? { includeWatchersCount: false, includeWatchState: true, includeReactions: false }
+        : undefined
     );
 
     res.json({ challenges: challengesWithWatchers });
@@ -2204,7 +2244,7 @@ router.get('/watched/feed/:userId', async (req, res) => {
     }
 
     const challenges = await Challenge.find({ _id: { $in: user.watchedChallenges } })
-      .select('title allowComments participants comments endDate challengeType actions')
+      .select('title allowComments participants comments endDate challengeType actions resultMissionEndedAt')
       .populate('participants.userId', 'name avatarUrl')
       .populate('comments.userId', 'name avatarUrl');
 

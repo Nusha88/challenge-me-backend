@@ -23,6 +23,12 @@ const mockChallenges = [
         userId: userA,
         text: 'Great day',
         createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000)
+      },
+      {
+        _id: 'comment-old',
+        userId: userA,
+        text: 'Stale',
+        createdAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000)
       }
     ],
     participants: [
@@ -35,7 +41,7 @@ const mockChallenges = [
   {
     _id: 'challenge-2',
     title: 'Silent Quest',
-    allowComments: false,
+    allowComments: true,
     challengeType: 'habit',
     endDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
     comments: [
@@ -71,9 +77,18 @@ const commentFromOpenChallenge = activities.find((item) => item.id === 'comment-
 assert.ok(commentFromOpenChallenge);
 assert.strictEqual(commentFromOpenChallenge.challengeTitle, 'Morning Run');
 assert.strictEqual(commentFromOpenChallenge.userName, 'Alice');
+assert.strictEqual(commentFromOpenChallenge.commentId, 'comment-1');
+
+assert.strictEqual(activities.find((item) => item.id.includes('comment-old')), undefined);
 
 const hiddenComment = activities.find((item) => item.id.includes('comment-hidden'));
 assert.strictEqual(hiddenComment, undefined);
+
+assert.ok(activities.some((item) => item.type === 'finished' && item.challengeId === 'challenge-2'));
+assert.strictEqual(
+  activities.some((item) => item.challengeId === 'challenge-2' && item.type !== 'finished'),
+  false
+);
 
 const sorted = [...activities].sort(
   (a, b) => new Date(b.timestamp) - new Date(a.timestamp)

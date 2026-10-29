@@ -123,28 +123,50 @@ function applyReactionPublicFields(challengeObj, viewerUserId) {
  * @param {string|null} viewerUserId - Authenticated user id, if any
  * @param {import('mongoose').Model} UserModel
  */
-async function enrichChallengesWithWatchState(challenges, viewerUserId, UserModel) {
+function toPlainChallenge(challenge) {
+  return typeof challenge.toObject === 'function' ? challenge.toObject() : { ...challenge }
+}
+
+async function enrichChallengesWithWatchState(challenges, viewerUserId, UserModel, options = {}) {
+  const includeWatchersCount = options.includeWatchersCount !== false
+  const includeWatchState = options.includeWatchState !== false
+  const includeReactions = options.includeReactions !== false
+
   let watchedIdSet = null
 
-  if (viewerUserId) {
+  if (includeWatchState && viewerUserId) {
     const viewer = await UserModel.findById(viewerUserId).select('watchedChallenges').lean()
     watchedIdSet = new Set((viewer?.watchedChallenges || []).map((id) => String(id)))
   }
 
+  if (!includeWatchersCount) {
+    return challenges.map((challenge) => {
+      const challengeObj = toPlainChallenge(challenge)
+      if (includeWatchState) {
+        challengeObj.isWatched = watchedIdSet
+          ? watchedIdSet.has(String(challengeObj._id))
+          : false
+      }
+      if (includeReactions) applyReactionPublicFields(challengeObj, viewerUserId)
+      return challengeObj
+    })
+  }
+
   return Promise.all(
     challenges.map(async (challenge) => {
-      const challengeObj =
-        typeof challenge.toObject === 'function' ? challenge.toObject() : { ...challenge }
+      const challengeObj = toPlainChallenge(challenge)
       const challengeId = challengeObj._id
 
       challengeObj.watchersCount = await UserModel.countDocuments({
         watchedChallenges: challengeId
       })
-      challengeObj.isWatched = watchedIdSet
-        ? watchedIdSet.has(String(challengeId))
-        : false
+      if (includeWatchState) {
+        challengeObj.isWatched = watchedIdSet
+          ? watchedIdSet.has(String(challengeId))
+          : false
+      }
 
-      applyReactionPublicFields(challengeObj, viewerUserId)
+      if (includeReactions) applyReactionPublicFields(challengeObj, viewerUserId)
 
       return challengeObj
     })

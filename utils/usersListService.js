@@ -17,7 +17,7 @@ function buildUserMatchStage(searchQuery) {
 }
 
 const SORT_OPTIONS = {
-  xp: { xp: -1, challengeCount: -1, createdAt: -1 },
+  xp: { xp: -1, createdAt: -1 },
   missions: { challengeCount: -1, xp: -1, createdAt: -1 },
   newest: { createdAt: -1, xp: -1 }
 };
@@ -26,54 +26,96 @@ function resolveSortSpec(sortKey) {
   return SORT_OPTIONS[sortKey] || SORT_OPTIONS.xp;
 }
 
+function needsChallengeCountForSort(sortKey) {
+  return sortKey === 'missions';
+}
+
+const USER_LIST_FIELDS = {
+  name: 1,
+  avatarUrl: 1,
+  xp: 1,
+  sparks: 1,
+  createdAt: 1
+};
+
+function challengeCountLookupStage() {
+  return {
+    $lookup: {
+      from: 'challenges',
+      let: { userId: '$_id' },
+      pipeline: [
+        {
+          $match: {
+            $expr: {
+              $or: [
+                { $eq: ['$owner', '$$userId'] },
+                { $in: ['$$userId', { $ifNull: ['$participants.userId', []] }] }
+              ]
+            }
+          }
+        },
+        { $count: 'count' }
+      ],
+      as: 'challengeStats'
+    }
+  };
+}
+
+function challengeCountAddFieldsStage() {
+  return {
+    $addFields: {
+      challengeCount: {
+        $ifNull: [{ $arrayElemAt: ['$challengeStats.count', 0] }, 0]
+      }
+    }
+  };
+}
+
+function challengeCountProjectStage() {
+  return {
+    $project: {
+      ...USER_LIST_FIELDS,
+      challengeCount: 1
+    }
+  };
+}
+
 function buildUsersListPipeline({ searchQuery, skip, limit, sort = 'xp' }) {
   const matchStage = buildUserMatchStage(searchQuery);
-  const sortSpec = resolveSortSpec(sort);
+  const sortKey = SORT_OPTIONS[sort] ? sort : 'xp';
+  const sortSpec = resolveSortSpec(sortKey);
+  const countForSort = needsChallengeCountForSort(sortKey);
+
+  const usersPageStages = countForSort
+    ? [{ $skip: skip }, { $limit: limit }]
+    : [
+        { $skip: skip },
+        { $limit: limit },
+        challengeCountLookupStage(),
+        challengeCountAddFieldsStage(),
+        challengeCountProjectStage()
+      ];
+
+  const beforeFacet = countForSort
+    ? [
+        { $match: matchStage },
+        challengeCountLookupStage(),
+        challengeCountAddFieldsStage(),
+        challengeCountProjectStage(),
+        { $sort: sortSpec }
+      ]
+    : [
+        { $match: matchStage },
+        { $project: USER_LIST_FIELDS },
+        { $sort: sortSpec }
+      ];
 
   return [
-    { $match: matchStage },
-    {
-      $lookup: {
-        from: 'challenges',
-        let: { userId: '$_id' },
-        pipeline: [
-          {
-            $match: {
-              $expr: {
-                $or: [
-                  { $eq: ['$owner', '$$userId'] },
-                  { $in: ['$$userId', { $ifNull: ['$participants.userId', []] }] }
-                ]
-              }
-            }
-          },
-          { $count: 'count' }
-        ],
-        as: 'challengeStats'
-      }
-    },
-    {
-      $addFields: {
-        challengeCount: {
-          $ifNull: [{ $arrayElemAt: ['$challengeStats.count', 0] }, 0]
-        }
-      }
-    },
-    {
-      $project: {
-        name: 1,
-        avatarUrl: 1,
-        xp: 1,
-        sparks: 1,
-        createdAt: 1,
-        challengeCount: 1
-      }
-    },
-    { $sort: sortSpec },
+    ...beforeFacet,
     {
       $facet: {
         metadata: [{ $count: 'total' }],
-        users: [{ $skip: skip }, { $limit: limit }]
+        users: usersPageStages
       }
     }
   ];
@@ -116,5 +158,6 @@ async function fetchPaginatedUsers(
 module.exports = {
   buildUsersListPipeline,
   fetchPaginatedUsers,
+  needsChallengeCountForSort,
   SORT_OPTIONS
 };
