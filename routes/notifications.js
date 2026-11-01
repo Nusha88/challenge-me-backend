@@ -42,6 +42,7 @@ router.get('/:userId', authenticateToken, async (req, res) => {
     const notifications = await Notification.find(query)
       .populate('fromUserId', 'name avatarUrl')
       .populate('challengeId', 'title')
+      .populate('campaignId', 'title')
       .sort({ createdAt: -1 })
       .limit(parseInt(limit));
 

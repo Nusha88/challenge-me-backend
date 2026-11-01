@@ -1,7 +1,7 @@
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { sendPushNotification } = require('./pushService');
-const { getLocalizedCommentPush, getLocalizedDailyRecap, getLocalizedFriendRequestPush, getLocalizedMissionInvitePush, getLocalizedCheerPush } = require('./notificationMessages');
+const { getLocalizedCommentPush, getLocalizedDailyRecap, getLocalizedFriendRequestPush, getLocalizedMissionInvitePush, getLocalizedCampaignInvitePush, getLocalizedCheerPush } = require('./notificationMessages');
 
 async function createNotificationWithPush({
   userId,
@@ -269,6 +269,54 @@ async function notifyMissionInvite({ recipientId, fromUserId, challenge }) {
   }
 }
 
+async function notifyCampaignInvite({ recipientId, fromUserId, campaign }) {
+  if (!recipientId || !fromUserId || !campaign?._id) return;
+  if (recipientId.toString() === fromUserId.toString()) return;
+
+  try {
+    const existing = await Notification.findOne({
+      userId: recipientId,
+      campaignId: campaign._id,
+      type: 'campaign_invite',
+      read: false
+    }).select('_id').lean();
+    if (existing) return;
+
+    const [fromUser, recipientUser] = await Promise.all([
+      User.findById(fromUserId).select('name'),
+      User.findById(recipientId).select('dailyRecapLanguage')
+    ]);
+    const { title, body } = getLocalizedCampaignInvitePush(
+      fromUser?.name,
+      campaign.title,
+      recipientUser?.dailyRecapLanguage
+    );
+
+    await createNotificationWithPush({
+      userId: recipientId,
+      type: 'campaign_invite',
+      notificationFields: {
+        fromUserId,
+        campaignId: campaign._id,
+        title,
+        body
+      },
+      push: {
+        title,
+        body,
+        tag: `campaign-invite-${campaign._id}`,
+        data: {
+          type: 'campaign_invite',
+          campaignId: campaign._id.toString(),
+          fromUserId: fromUserId.toString()
+        }
+      }
+    });
+  } catch (notificationError) {
+    console.error('Error creating campaign invite notification:', notificationError);
+  }
+}
+
 async function notifyCheer({ recipientId, fromUserId, challengeId = null, activityId = null }) {
   if (!recipientId || !fromUserId) return;
   if (recipientId.toString() === fromUserId.toString()) return;
@@ -348,6 +396,7 @@ module.exports = {
   sendDailyRecapNotification,
   notifyFriendRequest,
   notifyMissionInvite,
+  notifyCampaignInvite,
   notifyCheer,
   notifyReferralCompleted
 };

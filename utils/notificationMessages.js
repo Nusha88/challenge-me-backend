@@ -20,6 +20,8 @@ const MESSAGES = {
     pushFriendRequestBody: '{fromName} wants to join your squad',
     pushMissionInviteTitle: 'Squad ritual',
     pushMissionInviteBody: '{fromName} invited you to “{missionTitle}”',
+    pushCampaignInviteTitle: 'Challenge',
+    pushCampaignInviteBody: '{fromName} invited you to “{missionTitle}”',
     pushCheerTitle: 'Chronicle',
     pushCheerBody: '{fromName} ignited your chronicle'
   },
@@ -39,6 +41,8 @@ const MESSAGES = {
     pushFriendRequestBody: '{fromName} хочет вступить в твой отряд',
     pushMissionInviteTitle: 'Ритуал отряда',
     pushMissionInviteBody: '{fromName} приглашает тебя в «{missionTitle}»',
+    pushCampaignInviteTitle: 'Челлендж',
+    pushCampaignInviteBody: '{fromName} приглашает тебя в «{missionTitle}»',
     pushCheerTitle: 'Хроника',
     pushCheerBody: '{fromName} разжёг твою хронику'
   }
@@ -113,6 +117,20 @@ function getLocalizedMissionInvitePush(fromName, missionTitle, language) {
   };
 }
 
+function getLocalizedCampaignInvitePush(fromName, campaignTitle, language) {
+  const strings = MESSAGES[resolveLanguage(language)];
+  const name = fromName || strings.someone;
+  const title = campaignTitle || strings.defaultMission;
+  return {
+    title: strings.pushCampaignInviteTitle || MESSAGES.en.pushCampaignInviteTitle,
+    body: formatMessage(
+      strings.pushCampaignInviteBody || MESSAGES.en.pushCampaignInviteBody,
+      name,
+      title
+    )
+  };
+}
+
 function getLocalizedDailyRecap(language) {
   const strings = MESSAGES[resolveLanguage(language)];
   const bodies = strings.dailyRecapBodies || MESSAGES.en.dailyRecapBodies;
@@ -128,6 +146,7 @@ module.exports = {
   getLocalizedCommentPush,
   getLocalizedFriendRequestPush,
   getLocalizedMissionInvitePush,
+  getLocalizedCampaignInvitePush,
   getLocalizedCheerPush,
   getLocalizedDailyRecap,
   MESSAGES

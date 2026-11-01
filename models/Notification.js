@@ -10,7 +10,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['mention', 'comment', 'join', 'watch', 'daily_recap', 'referral_completed', 'friend_request', 'mission_invite', 'cheer'],
+      enum: ['mention', 'comment', 'join', 'watch', 'daily_recap', 'referral_completed', 'friend_request', 'mission_invite', 'campaign_invite', 'cheer'],
       required: true
     },
     title: {
@@ -35,6 +35,7 @@ const notificationSchema = new mongoose.Schema(
         return this.type !== 'daily_recap'
           && this.type !== 'referral_completed'
           && this.type !== 'friend_request'
+          && this.type !== 'campaign_invite'
           && this.type !== 'cheer';
       },
       default: null
@@ -58,6 +59,11 @@ const notificationSchema = new mongoose.Schema(
     friendshipId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Friendship',
+      default: null
+    },
+    campaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Campaign',
       default: null
     },
     read: {

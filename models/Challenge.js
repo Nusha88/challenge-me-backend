@@ -113,6 +113,17 @@ const challengeSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    campaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Campaign',
+      default: null,
+      index: true
+    },
+    campaignRole: {
+      type: String,
+      enum: ['shared', 'personalTemplate', 'personalClone'],
+      default: undefined
+    },
     difficulty: {
       type: String,
       enum: ['easy', 'medium', 'heroic'],
@@ -366,5 +377,6 @@ challengeSchema.index({ 'invites.userId': 1 });
 challengeSchema.index({ challengeType: 1, 'participants.userId': 1 });
 challengeSchema.index({ startDate: 1 });
 challengeSchema.index({ endDate: 1 });
+challengeSchema.index({ campaignId: 1, campaignRole: 1 });
 
 module.exports = mongoose.model('Challenge', challengeSchema);

@@ -15,6 +15,7 @@ const adminRoutes = require('./routes/admin');
 const shopRoutes = require('./routes/shop');
 const friendsRoutes = require('./routes/friends');
 const chronicleRoutes = require('./routes/chronicle');
+const campaignRoutes = require('./routes/campaigns');
 const { startDailyRecapScheduler } = require('./utils/dailyRecapScheduler');
 const { startWeeklyChronicleScheduler } = require('./utils/weeklyChronicleScheduler');
 const { startReactivationScheduler } = require('./utils/reactivationScheduler');
@@ -159,6 +160,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/friends', friendsRoutes);
 app.use('/api/chronicle', chronicleRoutes);
+app.use('/api/campaigns', campaignRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

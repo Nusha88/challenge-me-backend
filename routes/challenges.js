@@ -39,6 +39,11 @@ const {
   canViewInviteOnlyChallenge,
   isChallengeOwner
 } = require('../utils/missionInviteHelpers');
+const {
+  prepareCreatedChallenge,
+  finalizeCreatedChallenge
+} = require('../utils/campaignService');
+const { CAMPAIGN_ROLES } = require('../utils/campaignHelpers');
 const { getWelcomeBonusRewardPayload } = require('../utils/referralService');
 const {
   awardHabitDayXp,
@@ -375,7 +380,7 @@ function isChallengeCompleted(challenge, today) {
 // Create challenge
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward, templateId, inviteOnly, inviteUserIds } = req.body;
+    const { title, description, startDate, endDate, imageUrl, privacy, challengeType, frequency, actions, allowComments, difficulty, reward, templateId, inviteOnly, inviteUserIds, campaignId, campaignRole } = req.body;
     // Owner is always the authenticated user, never taken from the body.
     const owner = req.user.id;
 
@@ -436,10 +441,41 @@ router.post('/', authenticateToken, async (req, res) => {
       challengeData.allowComments = true;
     }
 
+    if (campaignId) {
+      try {
+        const prepared = await prepareCreatedChallenge(campaignId, owner, {
+          campaignRole,
+          startDate,
+          endDate,
+          challengeType
+        });
+        Object.assign(challengeData, prepared.challengePatch);
+      } catch (campaignError) {
+        const status = campaignError.status || 400;
+        return res.status(status).json({
+          message: campaignError.message || 'Unable to attach this mission to the challenge',
+          reason: campaignError.reason || 'campaign'
+        });
+      }
+    }
+
     const challenge = new Challenge(challengeData);
     await challenge.save();
 
-    if (challenge.inviteOnly && Array.isArray(inviteUserIds) && inviteUserIds.length > 0) {
+    if (challenge.campaignId) {
+      try {
+        await finalizeCreatedChallenge(challenge.campaignId, owner, challenge);
+      } catch (campaignError) {
+        await Challenge.deleteOne({ _id: challenge._id });
+        const status = campaignError.status || 400;
+        return res.status(status).json({
+          message: campaignError.message || 'Unable to attach this mission to the challenge',
+          reason: campaignError.reason || 'campaign'
+        });
+      }
+    }
+
+    if (challenge.inviteOnly && !challenge.campaignId && Array.isArray(inviteUserIds) && inviteUserIds.length > 0) {
       try {
         await sendInvites(challenge, owner, inviteUserIds, {
           joinDate: new Date(startDate)
@@ -1697,7 +1733,8 @@ router.get('/', async (req, res) => {
     const requestingUserId = decodeOptionalAuthUserId(req);
     const query = {
       privacy: { $ne: 'private' },
-      visibility: { $ne: false }
+      visibility: { $ne: false },
+      campaignRole: { $ne: CAMPAIGN_ROLES.PERSONAL_TEMPLATE }
     };
     const extra = [];
 
@@ -2077,6 +2114,8 @@ const USER_CHALLENGE_LIST_SELECT = [
   'participants.joinedAt',
   'participants.habitMissionEndedAt',
   'participants.completionTier',
+  'campaignId',
+  'campaignRole',
   'actions._id',
   'actions.checked',
   'actions.children._id',
@@ -2102,7 +2141,8 @@ router.get('/user/:userId', async (req, res) => {
       $or: [
         { owner: userId }, 
         { 'participants.userId': userId }
-      ]
+      ],
+      campaignRole: { $ne: CAMPAIGN_ROLES.PERSONAL_TEMPLATE }
     };
 
     // Filter by type (challengeType)
@@ -2310,6 +2350,9 @@ router.get('/:id', async (req, res) => {
     const ownerId = challenge.owner?._id || challenge.owner;
     const isOwner = viewerUserId && ownerId && String(ownerId) === String(viewerUserId);
     if (challenge.visibility === false && !isOwner) {
+      return res.status(404).json({ message: 'Challenge not found' });
+    }
+    if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_TEMPLATE && !isOwner) {
       return res.status(404).json({ message: 'Challenge not found' });
     }
     if (challenge.inviteOnly && !canViewInviteOnlyChallenge(challenge, viewerUserId)) {
