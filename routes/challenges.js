@@ -48,6 +48,7 @@ const {
   assertQuestStructureEditable
 } = require('../utils/campaignService');
 const { CAMPAIGN_ROLES, applyCheckedOntoActions } = require('../utils/campaignHelpers');
+const { isSuperAdminUserId } = require('../constants/superAdmin');
 
 function sendStructureLockError(res, error) {
   if (error?.reason !== 'structure_locked') return false;
@@ -2391,18 +2392,21 @@ router.get('/:id', async (req, res) => {
 
     const ownerId = challenge.owner?._id || challenge.owner;
     const isOwner = viewerUserId && ownerId && String(ownerId) === String(viewerUserId);
-    if (challenge.visibility === false && !isOwner) {
-      return res.status(404).json({ message: 'Challenge not found' });
+    const isSuperAdmin = isSuperAdminUserId(viewerUserId);
+    if (!isSuperAdmin) {
+      if (challenge.visibility === false && !isOwner) {
+        return res.status(404).json({ message: 'Challenge not found' });
+      }
+      if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_TEMPLATE && !isOwner) {
+        return res.status(404).json({ message: 'Challenge not found' });
+      }
+      if (challenge.inviteOnly && !canViewInviteOnlyChallenge(challenge, viewerUserId)) {
+        return res.status(404).json({ message: 'Challenge not found' });
+      }
     }
-    if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_TEMPLATE && !isOwner) {
-      return res.status(404).json({ message: 'Challenge not found' });
-    }
-    if (challenge.inviteOnly && !canViewInviteOnlyChallenge(challenge, viewerUserId)) {
-      return res.status(404).json({ message: 'Challenge not found' });
-    }
-    
+
     const challengeObj = challenge.toObject();
-    if (challenge.inviteOnly && !isChallengeOwner(challenge, viewerUserId)) {
+    if (challenge.inviteOnly && !isSuperAdmin && !isChallengeOwner(challenge, viewerUserId)) {
       challengeObj.invites = (challengeObj.invites || []).filter((row) => {
         const inviteeId = row?.userId?._id || row?.userId;
         return String(inviteeId) === String(viewerUserId);

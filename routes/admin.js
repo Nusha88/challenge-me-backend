@@ -2,25 +2,50 @@ const express = require('express');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const Challenge = require('../models/Challenge');
+const Campaign = require('../models/Campaign');
 const authenticateToken = require('../middleware/authenticateToken');
 const requireSuperAdmin = require('../middleware/requireSuperAdmin');
 const { isSuperAdminUserId } = require('../constants/superAdmin');
 const { fetchAdminUsers } = require('../utils/adminUsersService');
 const { deleteUserFromSystem } = require('../utils/deleteUserService');
 const { fetchAdminMissions } = require('../utils/adminMissionsService');
+const { fetchAdminCampaigns } = require('../utils/adminCampaignsService');
+const { fetchAdminOverview } = require('../utils/adminOverviewService');
 const { deleteMissionFromSystem } = require('../utils/deleteMissionService');
 
 const router = express.Router();
 
 const ALLOWED_STATUSES = new Set(['active', 'disabled']);
+const ALLOWED_MISSION_TYPES = new Set(['habit', 'result']);
+const ALLOWED_PRIVACY = new Set(['public', 'private']);
+const ALLOWED_MISSION_STATUSES = new Set(['active', 'upcoming', 'archived']);
+
+function queryString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+router.get('/overview', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const overview = await fetchAdminOverview({ User, Challenge, Campaign });
+    res.json(overview);
+  } catch (error) {
+    console.error('Admin overview error:', error);
+    res.status(500).json({
+      message: 'Error fetching overview',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 router.get('/users', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
-    const { page, limit, search } = req.query;
-    const searchQuery = typeof search === 'string' && search.trim() ? search.trim() : null;
+    const { page, limit, search, status } = req.query;
+    const searchQuery = queryString(search);
+    const statusFilter = ALLOWED_STATUSES.has(status) ? status : null;
 
     const result = await fetchAdminUsers(User, {
       searchQuery,
+      status: statusFilter,
       page,
       limit
     });
@@ -91,13 +116,33 @@ router.delete('/users/:id', authenticateToken, requireSuperAdmin, async (req, re
   }
 });
 
-router.get('/missions', authenticateToken, requireSuperAdmin, async (req, res) => {
+router.get('/campaigns', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const { page, limit, search } = req.query;
-    const searchQuery = typeof search === 'string' && search.trim() ? search.trim() : null;
+    const result = await fetchAdminCampaigns(Campaign, {
+      searchQuery: queryString(search),
+      page,
+      limit
+    });
 
+    res.json(result);
+  } catch (error) {
+    console.error('Admin campaigns list error:', error);
+    res.status(500).json({
+      message: 'Error fetching campaigns',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+router.get('/missions', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { page, limit, search, type, privacy, status } = req.query;
     const result = await fetchAdminMissions(Challenge, {
-      searchQuery,
+      searchQuery: queryString(search),
+      challengeType: ALLOWED_MISSION_TYPES.has(type) ? type : null,
+      privacy: ALLOWED_PRIVACY.has(privacy) ? privacy : null,
+      status: ALLOWED_MISSION_STATUSES.has(status) ? status : null,
       page,
       limit
     });

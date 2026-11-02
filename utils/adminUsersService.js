@@ -1,29 +1,41 @@
 const { getLevelFromXp } = require('./levelSystem');
+const { parseAdminPage, startOfToday, escapeRegExp } = require('./adminPage');
 
-function escapeRegExp(str) {
-  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function buildAdminUserMatchStage(searchQuery, status) {
+  const clauses = [];
+
+  if (searchQuery) {
+    const escaped = escapeRegExp(searchQuery);
+    clauses.push({
+      $or: [
+        { name: { $regex: escaped, $options: 'i' } },
+        { email: { $regex: escaped, $options: 'i' } }
+      ]
+    });
+  }
+
+  if (status === 'disabled') {
+    clauses.push({ status: 'disabled' });
+  } else if (status === 'active') {
+    clauses.push({ status: { $ne: 'disabled' } });
+  }
+
+  if (clauses.length === 0) return {};
+  if (clauses.length === 1) return clauses[0];
+  return { $and: clauses };
 }
 
-function buildAdminUserMatchStage(searchQuery) {
-  if (!searchQuery) return {};
-
-  const escaped = escapeRegExp(searchQuery);
-  return {
-    $or: [
-      { name: { $regex: escaped, $options: 'i' } },
-      { email: { $regex: escaped, $options: 'i' } }
-    ]
-  };
+function pickIdentity(user) {
+  const providers = (user?.identities || [])
+    .map((row) => row?.provider)
+    .filter(Boolean);
+  if (providers.includes('telegram')) return 'telegram';
+  if (providers.includes('google')) return 'google';
+  return null;
 }
 
-function startOfTodayUtc() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today;
-}
-
-function buildAdminUsersListPipeline({ searchQuery, skip, limit, today }) {
-  const matchStage = buildAdminUserMatchStage(searchQuery);
+function buildAdminUsersListPipeline({ searchQuery, status, skip, limit, today }) {
+  const matchStage = buildAdminUserMatchStage(searchQuery, status);
 
   return [
     { $match: matchStage },
@@ -90,7 +102,8 @@ function buildAdminUsersListPipeline({ searchQuery, skip, limit, today }) {
         status: 1,
         missionsTotal: 1,
         missionsActive: 1,
-        createdAt: 1
+        createdAt: 1,
+        identities: 1
       }
     },
     { $sort: { createdAt: -1, name: 1 } },
@@ -108,28 +121,29 @@ function mapAdminUserRow(user) {
   return {
     id: String(user._id),
     name: user.name,
-    email: user.email,
+    email: user.email || '',
+    identity: pickIdentity(user),
     xp,
     sparks: Number(user.sparks || 0),
     level: getLevelFromXp(xp),
     missionsTotal: Number(user.missionsTotal || 0),
     missionsActive: Number(user.missionsActive || 0),
-    status: user.status === 'disabled' ? 'disabled' : 'active'
+    status: user.status === 'disabled' ? 'disabled' : 'active',
+    createdAt: user.createdAt ? new Date(user.createdAt).toISOString() : null
   };
 }
 
 async function fetchAdminUsers(
   UserModel,
-  { searchQuery = null, page = 1, limit = 50 } = {}
+  { searchQuery = null, status = null, page = 1, limit = 50 } = {}
 ) {
-  const safePage = Math.max(1, parseInt(page, 10) || 1);
-  const safeLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
-  const skip = (safePage - 1) * safeLimit;
-  const today = startOfTodayUtc();
+  const { safePage, safeLimit, skip } = parseAdminPage({ page, limit });
+  const today = startOfToday();
 
   const [result] = await UserModel.aggregate(
     buildAdminUsersListPipeline({
       searchQuery,
+      status,
       skip,
       limit: safeLimit,
       today
@@ -154,5 +168,7 @@ async function fetchAdminUsers(
 
 module.exports = {
   fetchAdminUsers,
-  mapAdminUserRow
+  mapAdminUserRow,
+  buildAdminUserMatchStage,
+  pickIdentity
 };
