@@ -16,7 +16,8 @@ const {
   findPersonalClone,
   shouldClonePersonal,
   resolveCampaignStatus,
-  cloneActionsUnchecked
+  cloneActionsUnchecked,
+  applyCheckedOntoActions
 } = require('./campaignHelpers');
 
 const owner = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -72,6 +73,21 @@ assert.strictEqual(
 const cloned = cloneActionsUnchecked(campaign.personalTemplate.actions);
 assert.strictEqual(cloned[0].checked, false);
 assert.strictEqual(cloned[0].text, 'Book 1');
+
+const locked = applyCheckedOntoActions(
+  [
+    { _id: 'a1', text: 'Book 1', checked: false, children: [{ _id: 'c1', text: 'Ch 1', checked: false }] }
+  ],
+  [
+    { _id: 'a1', text: 'Changed', checked: true, children: [{ _id: 'c1', text: 'Nope', checked: true }] },
+    { _id: 'extra', text: 'New step', checked: true, children: [] }
+  ]
+);
+assert.strictEqual(locked.length, 1);
+assert.strictEqual(locked[0].text, 'Book 1');
+assert.strictEqual(locked[0].checked, true);
+assert.strictEqual(locked[0].children[0].text, 'Ch 1');
+assert.strictEqual(locked[0].children[0].checked, true);
 
 assert.strictEqual(resolveCampaignStatus({ ...campaign, status: 'draft' }), 'draft');
 assert.strictEqual(

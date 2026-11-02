@@ -41,9 +41,22 @@ const {
 } = require('../utils/missionInviteHelpers');
 const {
   prepareCreatedChallenge,
-  finalizeCreatedChallenge
+  finalizeCreatedChallenge,
+  constrainSlotChallengeUpdate,
+  syncDraftSlotAfterChallengeSave,
+  detachDraftSlotOnChallengeDelete,
+  assertQuestStructureEditable
 } = require('../utils/campaignService');
-const { CAMPAIGN_ROLES } = require('../utils/campaignHelpers');
+const { CAMPAIGN_ROLES, applyCheckedOntoActions } = require('../utils/campaignHelpers');
+
+function sendStructureLockError(res, error) {
+  if (error?.reason !== 'structure_locked') return false;
+  res.status(error.status || 403).json({
+    message: 'This quest can only be checked off',
+    reason: 'structure_locked'
+  });
+  return true;
+}
 const { getWelcomeBonusRewardPayload } = require('../utils/referralService');
 const {
   awardHabitDayXp,
@@ -533,10 +546,26 @@ router.patch('/:id/actions', authenticateToken, async (req, res) => {
       return res.status(403).json({ message: 'You are not authorized to update this challenge' });
     }
 
+    const { clientDayStr } = getClientDayRange(req, 0);
+    const startKey = normalizeDateLikeToYmd(challenge.startDate);
+    if (startKey && clientDayStr && startKey > clientDayStr) {
+      return res.status(400).json({ message: 'This mission has not started yet' });
+    }
+
     const prevActions = JSON.parse(JSON.stringify(challenge.actions || []));
     const wasCompletedBefore = isResultChallengeCompleted(prevActions);
 
-    challenge.actions = sanitized.actions;
+    if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_CLONE) {
+      challenge.actions = applyCheckedOntoActions(challenge.actions, sanitized.actions);
+    } else {
+      try {
+        await assertQuestStructureEditable(challenge);
+      } catch (error) {
+        if (sendStructureLockError(res, error)) return;
+        throw error;
+      }
+      challenge.actions = sanitized.actions;
+    }
     await challenge.save();
 
     const isCompletedNow = isResultChallengeCompleted(challenge.actions);
@@ -1118,6 +1147,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ message: 'You are not authorized to update this challenge' });
     }
 
+    try {
+      await assertQuestStructureEditable(existingChallenge);
+    } catch (error) {
+      if (sendStructureLockError(res, error)) return;
+      throw error;
+    }
+
     // Ownership is immutable via this endpoint; never reassign from the body.
     const effectiveOwnerId = existingChallenge.owner;
 
@@ -1162,6 +1198,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
     if (effectiveType === 'result' && reward !== undefined) {
       update.reward = typeof reward === 'string' ? reward.trim() : '';
     }
+
+    Object.assign(update, await constrainSlotChallengeUpdate(existingChallenge));
 
     const prevActions = JSON.parse(JSON.stringify(existingChallenge.actions || []));
     const wasCompletedBeforePut = isResultChallengeCompleted(prevActions);
@@ -1241,6 +1279,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
       
       await challenge.save();
     }
+
+    await syncDraftSlotAfterChallengeSave(challenge);
 
     const putRewardPayload = (putXpResults.length > 0 || putSparksResults.length > 0)
       ? buildRewardPayload({
@@ -2116,6 +2156,8 @@ const USER_CHALLENGE_LIST_SELECT = [
   'participants.completionTier',
   'campaignId',
   'campaignRole',
+  'templateId',
+  'isWeeklyRitual',
   'actions._id',
   'actions.checked',
   'actions.children._id',
@@ -2403,6 +2445,14 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ message: 'You are not authorized to delete this challenge' });
     }
 
+    try {
+      await assertQuestStructureEditable(challenge);
+    } catch (error) {
+      if (sendStructureLockError(res, error)) return;
+      throw error;
+    }
+
+    await detachDraftSlotOnChallengeDelete(challenge);
     await Challenge.findByIdAndDelete(id);
 
     res.json({

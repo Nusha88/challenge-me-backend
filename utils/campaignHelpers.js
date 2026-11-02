@@ -134,6 +134,35 @@ function resolveCampaignStatus(campaign, today = new Date()) {
   return 'active';
 }
 
+function actionIdOf(value) {
+  return value?._id != null ? String(value._id) : '';
+}
+
+function collectCheckedById(actions, map = new Map()) {
+  for (const action of actions || []) {
+    const id = actionIdOf(action);
+    if (id) map.set(id, Boolean(action.checked));
+    if (Array.isArray(action.children)) collectCheckedById(action.children, map);
+  }
+  return map;
+}
+
+function applyCheckedOntoActions(existing, incoming) {
+  const checkedById = collectCheckedById(incoming);
+  function copyNode(node) {
+    const plain = typeof node?.toObject === 'function' ? node.toObject() : { ...node };
+    const id = actionIdOf(plain);
+    const children = Array.isArray(plain.children) ? plain.children.map(copyNode) : [];
+    return {
+      ...(plain._id ? { _id: plain._id } : {}),
+      text: typeof plain.text === 'string' ? plain.text : '',
+      checked: id && checkedById.has(id) ? checkedById.get(id) : Boolean(plain.checked),
+      children
+    };
+  }
+  return (existing || []).map(copyNode);
+}
+
 function cloneActionsUnchecked(rawActions) {
   if (!Array.isArray(rawActions)) return [];
 
@@ -157,6 +186,7 @@ function cloneActionsUnchecked(rawActions) {
 
 function snapshotPersonalTemplate(challenge) {
   return {
+    challengeId: challenge?._id || challenge?.id || null,
     title: String(challenge?.title || '').trim(),
     description: String(challenge?.description || '').trim(),
     imageUrl: String(challenge?.imageUrl || ''),
@@ -194,5 +224,6 @@ module.exports = {
   shouldClonePersonal,
   resolveCampaignStatus,
   cloneActionsUnchecked,
+  applyCheckedOntoActions,
   snapshotPersonalTemplate
 };

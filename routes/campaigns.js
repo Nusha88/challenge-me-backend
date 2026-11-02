@@ -5,6 +5,7 @@ const { getClientDayRange } = require('../utils/dateHelpers');
 const {
   createDraft,
   updateDraft,
+  deleteDraft,
   attachSharedSlot,
   attachPersonalSlot,
   publish,
@@ -34,6 +35,7 @@ const ERROR_MESSAGES = {
   challenge_not_found: 'Mission not found',
   personal_incomplete: 'The personal quest is incomplete',
   slots_incomplete: 'Add a shared ritual and a personal quest first',
+  invites_required: 'Invite at least one friend',
   invite_not_found: 'Invite not found',
   not_published: 'This challenge is not open yet',
   owner_cannot_leave: 'The organizer cannot leave the challenge',
@@ -85,6 +87,15 @@ router.put('/:id', async (req, res) => {
   try {
     const campaign = await updateDraft(req.params.id, req.user.id, req.body || {});
     res.json({ campaign });
+  } catch (error) {
+    sendCampaignError(res, error);
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const result = await deleteDraft(req.params.id, req.user.id);
+    res.json(result);
   } catch (error) {
     sendCampaignError(res, error);
   }

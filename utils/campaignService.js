@@ -24,6 +24,7 @@ const {
   resolveCampaignStatus,
   cloneActionsUnchecked,
   snapshotPersonalTemplate,
+  applyCheckedOntoActions,
   ownerIdOf
 } = require('./campaignHelpers');
 
@@ -47,6 +48,20 @@ function withLiveStatus(campaign, today = new Date()) {
   if (!campaign) return campaign;
   const plain = typeof campaign.toObject === 'function' ? campaign.toObject() : { ...campaign };
   plain.status = resolveCampaignStatus(plain, today);
+  return plain;
+}
+
+function templateChallengeIdFrom(campaign) {
+  const value = campaign?.personalTemplate?.challengeId;
+  if (!value) return '';
+  if (typeof value === 'object') return String(value._id || value.id || '');
+  return String(value);
+}
+
+async function presentCampaign(campaignId) {
+  const plain = withLiveStatus(await populateCampaign(campaignId));
+  plain.personalTemplateChallengeId = templateChallengeIdFrom(plain)
+    || await findPersonalTemplateChallengeId(campaignId);
   return plain;
 }
 
@@ -133,7 +148,7 @@ async function createDraft(ownerId, payload = {}) {
 
   await queueInvites(campaign, ownerId, payload.inviteUserIds);
   await campaign.save();
-  return withLiveStatus(await populateCampaign(campaign._id));
+  return presentCampaign(campaign._id);
 }
 
 async function updateDraft(campaignId, ownerId, payload = {}) {
@@ -174,12 +189,22 @@ async function updateDraft(campaignId, ownerId, payload = {}) {
     { $set: datePatch }
   );
 
-  return withLiveStatus(await populateCampaign(campaign._id));
+  return presentCampaign(campaign._id);
 }
 
 function assertDraftOwner(campaign, ownerId) {
   if (!isCampaignOwner(campaign, ownerId)) throw serviceError('forbidden', 403);
   if (campaign.status !== 'draft') throw serviceError('not_draft', 400);
+}
+
+async function deleteDraft(campaignId, ownerId) {
+  const campaign = await loadCampaign(campaignId);
+  assertDraftOwner(campaign, ownerId);
+
+  await Challenge.deleteMany({ campaignId: campaign._id });
+  await Notification.deleteMany({ campaignId: campaign._id });
+  await Campaign.deleteOne({ _id: campaign._id });
+  return { status: 'deleted' };
 }
 
 async function prepareCreatedChallenge(campaignId, ownerId, fields = {}) {
@@ -243,13 +268,13 @@ async function finalizeCreatedChallenge(campaignId, ownerId, challenge) {
     }
     campaign.sharedChallengeId = challenge._id;
     await campaign.save();
-    return withLiveStatus(await populateCampaign(campaign._id));
+    return presentCampaign(campaign._id);
   }
 
   if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_TEMPLATE) {
     campaign.personalTemplate = snapshotPersonalTemplate(challenge);
     await campaign.save();
-    return withLiveStatus(await populateCampaign(campaign._id));
+    return presentCampaign(campaign._id);
   }
 
   throw serviceError('invalid_slot', 400);
@@ -278,7 +303,7 @@ async function attachSharedSlot(campaignId, ownerId, challengeId) {
 
   campaign.sharedChallengeId = challenge._id;
   await campaign.save();
-  return withLiveStatus(await populateCampaign(campaign._id));
+  return presentCampaign(campaign._id);
 }
 
 async function attachPersonalSlot(campaignId, ownerId, payload = {}) {
@@ -309,7 +334,7 @@ async function attachPersonalSlot(campaignId, ownerId, payload = {}) {
   }
 
   await campaign.save();
-  return withLiveStatus(await populateCampaign(campaign._id));
+  return presentCampaign(campaign._id);
 }
 
 async function clonePersonalQuest(campaign, userId, joinDate) {
@@ -410,6 +435,9 @@ async function publish(campaignId, ownerId, joinDate) {
     campaign.personalTemplate = snapshotPersonalTemplate(source);
   }
   if (!hasPersonalTemplate(campaign)) throw serviceError('slots_incomplete', 400);
+  if (!(campaign.invites || []).some((row) => idOf(row.userId))) {
+    throw serviceError('invites_required', 400);
+  }
 
   if (shouldClonePersonal(campaign, ownerId)) {
     await clonePersonalQuest(campaign, ownerId, joinDate);
@@ -427,7 +455,7 @@ async function publish(campaignId, ownerId, joinDate) {
     }))
   );
 
-  return withLiveStatus(await populateCampaign(campaign._id));
+  return presentCampaign(campaign._id);
 }
 
 async function acceptInvite(campaignId, userId, joinDate) {
@@ -452,7 +480,7 @@ async function acceptInvite(campaignId, userId, joinDate) {
 
   await campaign.save();
   await clearCampaignInviteNotifications(campaign._id, userId);
-  return withLiveStatus(await populateCampaign(campaign._id));
+  return presentCampaign(campaign._id);
 }
 
 async function rejectInvite(campaignId, userId) {
@@ -480,7 +508,7 @@ async function leaveCampaign(campaignId, userId) {
     );
   }
 
-  return withLiveStatus(await populateCampaign(campaign._id));
+  return presentCampaign(campaign._id);
 }
 
 async function listForUser(userId) {
@@ -503,18 +531,87 @@ async function listForUser(userId) {
     .filter((campaign) => campaign.status !== 'draft' || isCampaignOwner(campaign, userId));
 }
 
+async function assertQuestStructureEditable(challenge) {
+  const role = challenge?.campaignRole;
+  if (role === CAMPAIGN_ROLES.PERSONAL_CLONE) {
+    throw serviceError('structure_locked', 403);
+  }
+  if (role !== CAMPAIGN_ROLES.PERSONAL_TEMPLATE) return;
+  if (!challenge.campaignId) throw serviceError('structure_locked', 403);
+  const campaign = await Campaign.findById(challenge.campaignId).select('status');
+  if (!campaign || campaign.status !== 'draft') {
+    throw serviceError('structure_locked', 403);
+  }
+}
+
+async function findPersonalTemplateChallengeId(campaignId) {
+  const template = await Challenge.findOne({
+    campaignId,
+    campaignRole: CAMPAIGN_ROLES.PERSONAL_TEMPLATE
+  }).select('_id').lean();
+  return template?._id ? String(template._id) : '';
+}
+
+async function constrainSlotChallengeUpdate(challenge, update = {}) {
+  if (!challenge?.campaignId) return update;
+  const campaign = await Campaign.findById(challenge.campaignId).select('startDate endDate');
+  if (!campaign) return update;
+  return {
+    ...update,
+    startDate: campaign.startDate,
+    endDate: campaign.endDate
+  };
+}
+
+async function syncDraftSlotAfterChallengeSave(challenge) {
+  if (!challenge?.campaignId || challenge.campaignRole !== CAMPAIGN_ROLES.PERSONAL_TEMPLATE) return;
+  const campaign = await Campaign.findById(challenge.campaignId);
+  if (!campaign || campaign.status !== 'draft') return;
+  campaign.personalTemplate = snapshotPersonalTemplate(challenge);
+  await campaign.save();
+}
+
+async function detachDraftSlotOnChallengeDelete(challenge) {
+  if (!challenge?.campaignId) return;
+  const campaign = await Campaign.findById(challenge.campaignId);
+  if (!campaign || campaign.status !== 'draft') return;
+
+  if (
+    challenge.campaignRole === CAMPAIGN_ROLES.SHARED
+    && String(campaign.sharedChallengeId || '') === String(challenge._id)
+  ) {
+    campaign.sharedChallengeId = null;
+    await campaign.save();
+    return;
+  }
+
+  if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_TEMPLATE) {
+    campaign.personalTemplate = {
+      challengeId: null,
+      title: '',
+      description: '',
+      imageUrl: '',
+      actions: [],
+      reward: '',
+      difficulty: 'medium'
+    };
+    await campaign.save();
+  }
+}
+
 async function getById(campaignId, userId) {
   const campaign = await loadCampaign(campaignId);
   if (!canViewCampaign(campaign, userId)) throw serviceError('campaign_not_found', 404);
   if (campaign.status === 'draft' && !isCampaignOwner(campaign, userId)) {
     throw serviceError('campaign_not_found', 404);
   }
-  return withLiveStatus(await populateCampaign(campaign._id));
+  return presentCampaign(campaign._id);
 }
 
 module.exports = {
   createDraft,
   updateDraft,
+  deleteDraft,
   prepareCreatedChallenge,
   finalizeCreatedChallenge,
   attachSharedSlot,
@@ -526,5 +623,10 @@ module.exports = {
   listForUser,
   getById,
   withLiveStatus,
+  constrainSlotChallengeUpdate,
+  syncDraftSlotAfterChallengeSave,
+  detachDraftSlotOnChallengeDelete,
+  assertQuestStructureEditable,
+  applyCheckedOntoActions,
   ownerIdOf
 };

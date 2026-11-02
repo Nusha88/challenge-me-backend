@@ -72,6 +72,11 @@ const campaignSchema = new mongoose.Schema(
       default: null
     },
     personalTemplate: {
+      challengeId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Challenge',
+        default: null
+      },
       title: { type: String, default: '' },
       description: { type: String, default: '' },
       imageUrl: { type: String, default: '' },

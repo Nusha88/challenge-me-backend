@@ -23,6 +23,12 @@ const valid = {
 valid.hash = sign(valid);
 
 assert.strictEqual(verifyTelegramAuth(valid, BOT_TOKEN).ok, true);
+assert.strictEqual(verifyTelegramAuth({
+  ...valid,
+  referralCode: 'hero-1',
+  redirect: '/today'
+}, BOT_TOKEN).ok, true);
+assert.strictEqual(verifyTelegramAuth(valid, `"${BOT_TOKEN}"`).ok, true);
 
 const tampered = { ...valid, first_name: 'Eve' };
 tampered.hash = valid.hash;
