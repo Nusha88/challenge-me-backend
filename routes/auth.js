@@ -51,6 +51,10 @@ function isSafeAvatarUrl(url) {
   return /^https?:\/\//i.test(url.trim());
 }
 
+function hasDeliverableEmail(user) {
+  return /^\S+@\S+\.\S+$/.test(String(user?.email || '').trim());
+}
+
 const {
   getClientDayRange,
   getClientLocalHour,
@@ -793,14 +797,19 @@ router.put('/profile', authenticateToken, async (req, res) => {
 
 router.get('/weekly-chronicle-settings', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id, 'weeklyChronicleEmailEnabled preferredLanguage dailyRecapLanguage');
+    const user = await User.findById(
+      req.user.id,
+      'email weeklyChronicleEmailEnabled preferredLanguage dailyRecapLanguage'
+    );
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const hasEmail = hasDeliverableEmail(user);
     res.json({
-      weeklyChronicleEmailEnabled: !!user.weeklyChronicleEmailEnabled,
+      weeklyChronicleEmailEnabled: hasEmail && !!user.weeklyChronicleEmailEnabled,
+      hasEmail,
       preferredLanguage: user.preferredLanguage || user.dailyRecapLanguage || 'en'
     });
   } catch (error) {
@@ -827,6 +836,15 @@ router.put('/weekly-chronicle-settings', authenticateToken, async (req, res) => 
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const hasEmail = hasDeliverableEmail(user);
+    if (weeklyChronicleEmailEnabled === true && !hasEmail) {
+      return res.status(400).json({
+        message: 'Email is required to enable weekly chronicle',
+        hasEmail: false,
+        weeklyChronicleEmailEnabled: false
+      });
+    }
+
     if (weeklyChronicleEmailEnabled !== undefined) {
       user.weeklyChronicleEmailEnabled = weeklyChronicleEmailEnabled;
     }
@@ -839,7 +857,8 @@ router.put('/weekly-chronicle-settings', authenticateToken, async (req, res) => 
 
     res.json({
       message: 'Weekly chronicle settings updated',
-      weeklyChronicleEmailEnabled: !!user.weeklyChronicleEmailEnabled,
+      weeklyChronicleEmailEnabled: hasEmail && !!user.weeklyChronicleEmailEnabled,
+      hasEmail,
       preferredLanguage: user.preferredLanguage || 'en'
     });
   } catch (error) {
