@@ -1686,8 +1686,10 @@ const WORLD_CHALLENGE_LIST_SELECT = [
   'participants.habitMissionEndedAt',
   'participants.completionTier',
   'actions._id',
+  'actions.text',
   'actions.checked',
   'actions.children._id',
+  'actions.children.text',
   'actions.children.checked'
 ].join(' ');
 
@@ -2160,8 +2162,10 @@ const USER_CHALLENGE_LIST_SELECT = [
   'templateId',
   'isWeeklyRitual',
   'actions._id',
+  'actions.text',
   'actions.checked',
   'actions.children._id',
+  'actions.children.text',
   'actions.children.checked'
 ].join(' ');
 
