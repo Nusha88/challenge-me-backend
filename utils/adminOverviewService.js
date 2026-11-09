@@ -45,22 +45,30 @@ function buildAdminOverviewQueries(today = startOfToday()) {
   };
 }
 
-async function fetchAdminOverview({ User, Challenge, Campaign }, today = startOfToday()) {
+async function fetchAdminOverview({ User, Challenge, Campaign, Visit }, today = startOfToday()) {
   const queries = buildAdminOverviewQueries(today);
+  const { fetchVisitOverview } = require('./visitService');
   const [
     usersTotal,
     usersNew7d,
     usersDisabled,
     missionsActive,
     missionsPublicVisible,
-    campaignsLive
+    campaignsLive,
+    visitStats
   ] = await Promise.all([
     User.countDocuments(queries.usersTotal),
     User.countDocuments(queries.usersNew7d),
     User.countDocuments(queries.usersDisabled),
     Challenge.countDocuments(queries.missionsActive),
     Challenge.countDocuments(queries.missionsPublicVisible),
-    Campaign.countDocuments(queries.campaignsLive)
+    Campaign.countDocuments(queries.campaignsLive),
+    Visit ? fetchVisitOverview(Visit, today) : Promise.resolve({
+      visitorsToday: 0,
+      visitors7d: 0,
+      lurkers7d: 0,
+      converted7d: 0
+    })
   ]);
 
   return {
@@ -69,7 +77,8 @@ async function fetchAdminOverview({ User, Challenge, Campaign }, today = startOf
     usersDisabled,
     missionsActive,
     missionsPublicVisible,
-    campaignsLive
+    campaignsLive,
+    ...visitStats
   };
 }
 

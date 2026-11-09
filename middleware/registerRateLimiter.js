@@ -27,6 +27,20 @@ const authRateLimiter = rateLimit({
   }
 });
 
+const visitWindowMs = Number.parseInt(process.env.VISIT_RATE_LIMIT_WINDOW_MS || '900000', 10);
+const visitMax = Number.parseInt(process.env.VISIT_RATE_LIMIT_MAX || '120', 10);
+
+const visitRateLimiter = rateLimit({
+  windowMs: Number.isFinite(visitWindowMs) && visitWindowMs > 0 ? visitWindowMs : 900000,
+  max: Number.isFinite(visitMax) && visitMax > 0 ? visitMax : 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    message: 'Too many visit beacons from this IP. Please try again later.'
+  }
+});
+
 module.exports = registerRateLimiter;
 module.exports.registerRateLimiter = registerRateLimiter;
 module.exports.authRateLimiter = authRateLimiter;
+module.exports.visitRateLimiter = visitRateLimiter;

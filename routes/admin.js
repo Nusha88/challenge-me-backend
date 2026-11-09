@@ -11,7 +11,9 @@ const { deleteUserFromSystem } = require('../utils/deleteUserService');
 const { fetchAdminMissions } = require('../utils/adminMissionsService');
 const { fetchAdminCampaigns } = require('../utils/adminCampaignsService');
 const { fetchAdminOverview } = require('../utils/adminOverviewService');
+const { fetchAdminVisits } = require('../utils/visitService');
 const { deleteMissionFromSystem } = require('../utils/deleteMissionService');
+const Visit = require('../models/Visit');
 
 const router = express.Router();
 
@@ -26,7 +28,7 @@ function queryString(value) {
 
 router.get('/overview', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
-    const overview = await fetchAdminOverview({ User, Challenge, Campaign });
+    const overview = await fetchAdminOverview({ User, Challenge, Campaign, Visit });
     res.json(overview);
   } catch (error) {
     console.error('Admin overview error:', error);
@@ -112,6 +114,27 @@ router.delete('/users/:id', authenticateToken, requireSuperAdmin, async (req, re
     res.status(status).json({
       message: error.message || 'Error deleting user',
       error: process.env.NODE_ENV === 'development' && status >= 500 ? error.message : undefined
+    });
+  }
+});
+
+const ALLOWED_VISIT_CONVERTED = new Set(['all', 'lurkers', 'converted']);
+
+router.get('/visits', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { page, limit, converted, days } = req.query;
+    const result = await fetchAdminVisits(Visit, {
+      page,
+      limit,
+      converted: ALLOWED_VISIT_CONVERTED.has(converted) ? converted : undefined,
+      days
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('Admin visits list error:', error);
+    res.status(500).json({
+      message: 'Error fetching visits',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
