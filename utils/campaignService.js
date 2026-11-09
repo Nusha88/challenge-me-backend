@@ -511,6 +511,28 @@ async function leaveCampaign(campaignId, userId) {
   return presentCampaign(campaign._id);
 }
 
+async function kickCampaignMember(campaignId, ownerId, targetUserId) {
+  const campaign = await loadCampaign(campaignId);
+  if (!isCampaignOwner(campaign, ownerId)) throw serviceError('forbidden', 403);
+  if (campaign.status === 'draft') throw serviceError('not_published', 400);
+  if (!isValidUserId(targetUserId)) throw serviceError('invalid_user', 400);
+  if (isCampaignOwner(campaign, targetUserId)) throw serviceError('owner_cannot_leave', 400);
+  if (!isCampaignMember(campaign, targetUserId)) throw serviceError('not_a_member', 400);
+
+  campaign.members = campaign.members.filter((row) => idOf(row.userId) !== String(targetUserId));
+  await campaign.save();
+
+  if (campaign.sharedChallengeId) {
+    const kickedId = toObjectId(targetUserId);
+    await Challenge.updateOne(
+      { _id: campaign.sharedChallengeId, 'participants.userId': kickedId },
+      { $pull: { participants: { userId: kickedId } } }
+    );
+  }
+
+  return presentCampaign(campaign._id);
+}
+
 async function listForUser(userId) {
   const campaigns = await Campaign.find({
     $or: [
@@ -620,6 +642,7 @@ module.exports = {
   acceptInvite,
   rejectInvite,
   leaveCampaign,
+  kickCampaignMember,
   listForUser,
   getById,
   withLiveStatus,

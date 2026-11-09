@@ -12,6 +12,7 @@ const {
   acceptInvite,
   rejectInvite,
   leaveCampaign,
+  kickCampaignMember,
   listForUser,
   getById
 } = require('../utils/campaignService');
@@ -40,7 +41,8 @@ const ERROR_MESSAGES = {
   not_published: 'This challenge is not open yet',
   owner_cannot_leave: 'The organizer cannot leave the challenge',
   not_a_member: 'You are not in this challenge',
-  shared_missing: 'The shared ritual is missing'
+  shared_missing: 'The shared ritual is missing',
+  invalid_user: 'Invalid user'
 };
 
 function sendCampaignError(res, error) {
@@ -151,6 +153,19 @@ router.post('/:id/invites/reject', async (req, res) => {
 router.post('/:id/leave', async (req, res) => {
   try {
     const campaign = await leaveCampaign(req.params.id, req.user.id);
+    res.json({ campaign });
+  } catch (error) {
+    sendCampaignError(res, error);
+  }
+});
+
+router.post('/:id/kick', async (req, res) => {
+  try {
+    const campaign = await kickCampaignMember(
+      req.params.id,
+      req.user.id,
+      req.body?.userId
+    );
     res.json({ campaign });
   } catch (error) {
     sendCampaignError(res, error);
