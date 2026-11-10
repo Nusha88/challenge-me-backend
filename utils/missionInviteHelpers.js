@@ -62,6 +62,32 @@ function canViewInviteOnlyChallenge(challenge, viewerId) {
   );
 }
 
+function isChallengeMember(challenge, viewerId) {
+  return (
+    isChallengeOwner(challenge, viewerId)
+    || isChallengeParticipant(challenge, viewerId)
+    || isChallengeInvitee(challenge, viewerId)
+  );
+}
+
+function canViewChallenge(challenge, viewerId, { isSuperAdmin = false } = {}) {
+  if (!challenge) return false;
+  if (isSuperAdmin) return true;
+  if (challenge.visibility === false && !isChallengeOwner(challenge, viewerId)) {
+    return false;
+  }
+  if (challenge.campaignRole === 'personalTemplate' && !isChallengeOwner(challenge, viewerId)) {
+    return false;
+  }
+  if (challenge.inviteOnly && !canViewInviteOnlyChallenge(challenge, viewerId)) {
+    return false;
+  }
+  if (challenge.privacy === 'private' && !isChallengeMember(challenge, viewerId)) {
+    return false;
+  }
+  return true;
+}
+
 function serializeInvite(row) {
   const user = row?.userId && typeof row.userId === 'object' && row.userId._id
     ? {
@@ -89,5 +115,7 @@ module.exports = {
   guestCount,
   remainingInviteSlots,
   canViewInviteOnlyChallenge,
+  isChallengeMember,
+  canViewChallenge,
   serializeInvite
 };

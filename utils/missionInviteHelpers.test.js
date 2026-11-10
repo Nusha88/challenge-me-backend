@@ -5,6 +5,7 @@ const {
   guestCount,
   remainingInviteSlots,
   canViewInviteOnlyChallenge,
+  canViewChallenge,
   isChallengeOwner,
   isChallengeInvitee
 } = require('./missionInviteHelpers');
@@ -36,6 +37,46 @@ assert.strictEqual(canViewInviteOnlyChallenge(challenge, friend), true);
 assert.strictEqual(canViewInviteOnlyChallenge(challenge, stranger), false);
 assert.strictEqual(canViewInviteOnlyChallenge(challenge, null), false);
 assert.strictEqual(canViewInviteOnlyChallenge({ inviteOnly: false }, stranger), true);
+
+const privateSolo = {
+  privacy: 'private',
+  inviteOnly: false,
+  visibility: true,
+  owner,
+  participants: [{ userId: owner }]
+};
+assert.strictEqual(canViewChallenge(privateSolo, owner), true);
+assert.strictEqual(canViewChallenge(privateSolo, stranger), false);
+assert.strictEqual(canViewChallenge(privateSolo, null), false);
+assert.strictEqual(canViewChallenge(privateSolo, stranger, { isSuperAdmin: true }), true);
+
+const hiddenPublic = {
+  privacy: 'public',
+  visibility: false,
+  owner,
+  participants: [{ userId: owner }]
+};
+assert.strictEqual(canViewChallenge(hiddenPublic, owner), true);
+assert.strictEqual(canViewChallenge(hiddenPublic, stranger), false);
+
+const template = {
+  privacy: 'private',
+  campaignRole: 'personalTemplate',
+  owner,
+  participants: [{ userId: owner }]
+};
+assert.strictEqual(canViewChallenge(template, owner), true);
+assert.strictEqual(canViewChallenge(template, stranger), false);
+
+const publicMission = {
+  privacy: 'public',
+  visibility: true,
+  owner,
+  participants: [{ userId: owner }]
+};
+assert.strictEqual(canViewChallenge(publicMission, stranger), true);
+assert.strictEqual(canViewChallenge(challenge, stranger), false);
+assert.strictEqual(canViewChallenge(challenge, friend), true);
 
 const full = {
   owner,

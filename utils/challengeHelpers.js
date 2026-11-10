@@ -426,6 +426,9 @@ async function countUserChallenges(userId, { includePrivate = true } = {}) {
   };
   if (!includePrivate) {
     query.privacy = { $ne: 'private' };
+    query.visibility = { $ne: false };
+    query.inviteOnly = { $ne: true };
+    query.campaignRole = { $ne: 'personalTemplate' };
   }
   return Challenge.countDocuments(query);
 }

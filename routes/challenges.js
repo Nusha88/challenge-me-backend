@@ -36,7 +36,7 @@ const {
   cancelInvite
 } = require('../utils/missionInviteService');
 const {
-  canViewInviteOnlyChallenge,
+  canViewChallenge,
   isChallengeOwner
 } = require('../utils/missionInviteHelpers');
 const {
@@ -57,6 +57,18 @@ function sendStructureLockError(res, error) {
     reason: 'structure_locked'
   });
   return true;
+}
+
+function rejectIfCannotViewChallenge(challenge, viewerId, res) {
+  if (!challenge) {
+    res.status(404).json({ message: 'Challenge not found' });
+    return true;
+  }
+  if (!canViewChallenge(challenge, viewerId, { isSuperAdmin: isSuperAdminUserId(viewerId) })) {
+    res.status(404).json({ message: 'Challenge not found' });
+    return true;
+  }
+  return false;
 }
 const { getWelcomeBonusRewardPayload } = require('../utils/referralService');
 const {
@@ -2223,6 +2235,7 @@ router.get('/user/:userId', async (req, res) => {
     }
     if (!isOwnProfile) {
       query.visibility = { $ne: false };
+      query.inviteOnly = { $ne: true };
     }
 
     // Card lists skip comments, invites, and populated avatars.
@@ -2397,6 +2410,7 @@ router.get('/:id', async (req, res) => {
 
     const [challenge, watchersCount, viewer] = await Promise.all([
       Challenge.findById(id)
+        .select('-userDiaryEntries')
         .populate('owner', 'name avatarUrl')
         .populate('participants.userId', 'name avatarUrl')
         .populate('invites.userId', 'name avatarUrl'),
@@ -2410,22 +2424,13 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Challenge not found' });
     }
 
-    const ownerId = challenge.owner?._id || challenge.owner;
-    const isOwner = viewerUserId && ownerId && String(ownerId) === String(viewerUserId);
     const isSuperAdmin = isSuperAdminUserId(viewerUserId);
-    if (!isSuperAdmin) {
-      if (challenge.visibility === false && !isOwner) {
-        return res.status(404).json({ message: 'Challenge not found' });
-      }
-      if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_TEMPLATE && !isOwner) {
-        return res.status(404).json({ message: 'Challenge not found' });
-      }
-      if (challenge.inviteOnly && !canViewInviteOnlyChallenge(challenge, viewerUserId)) {
-        return res.status(404).json({ message: 'Challenge not found' });
-      }
+    if (!canViewChallenge(challenge, viewerUserId, { isSuperAdmin })) {
+      return res.status(404).json({ message: 'Challenge not found' });
     }
 
     const challengeObj = challenge.toObject();
+    delete challengeObj.userDiaryEntries;
     if (challenge.inviteOnly && !isSuperAdmin && !isChallengeOwner(challenge, viewerUserId)) {
       challengeObj.invites = (challengeObj.invites || []).filter((row) => {
         const inviteeId = row?.userId?._id || row?.userId;
@@ -2626,9 +2631,7 @@ router.post('/:id/comments', authenticateToken, async (req, res) => {
     }
 
     const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
-    if (!challenge) {
-      return res.status(404).json({ message: 'Challenge not found' });
-    }
+    if (rejectIfCannotViewChallenge(challenge, userId, res)) return;
 
     if (!challenge.allowComments && !challenge.inviteOnly) {
       return res.status(403).json({ message: 'Comments are disabled for this challenge' });
@@ -2688,15 +2691,14 @@ const COMMENTS_PAGE_MAX = 100;
 
 router.get('/:id/comments', async (req, res) => {
   try {
+    const viewerUserId = decodeOptionalAuthUserId(req);
     const challenge = await Challenge.findById(req.params.id)
       .populate('comments.userId', 'name avatarUrl')
       .populate('comments.replies.userId', 'name avatarUrl')
       .populate('comments.replies.mentionedUserId', 'name avatarUrl')
-      .select('comments allowComments');
+      .select('comments allowComments privacy inviteOnly visibility campaignRole owner participants.userId invites.userId');
 
-    if (!challenge) {
-      return res.status(404).json({ message: 'Challenge not found' });
-    }
+    if (rejectIfCannotViewChallenge(challenge, viewerUserId, res)) return;
 
     // Paginate over the embedded array so huge threads don't ship whole.
     // offset counts back from the newest comment (offset=0 → latest page);
@@ -2767,9 +2769,7 @@ router.post('/:id/comments/:commentId/reply', authenticateToken, async (req, res
     }
 
     const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
-    if (!challenge) {
-      return res.status(404).json({ message: 'Challenge not found' });
-    }
+    if (rejectIfCannotViewChallenge(challenge, userId, res)) return;
 
     if (!challenge.allowComments && !challenge.inviteOnly) {
       return res.status(403).json({ message: 'Comments are disabled for this challenge' });
@@ -2995,9 +2995,7 @@ router.post('/:id/comments/:commentId/replies/:replyId/reply', authenticateToken
     }
 
     const challenge = await Challenge.findById(req.params.id).populate('owner', '_id');
-    if (!challenge) {
-      return res.status(404).json({ message: 'Challenge not found' });
-    }
+    if (rejectIfCannotViewChallenge(challenge, userId, res)) return;
 
     if (!challenge.allowComments && !challenge.inviteOnly) {
       return res.status(403).json({ message: 'Comments are disabled for this challenge' });

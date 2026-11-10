@@ -1,12 +1,14 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const Challenge = require('../models/Challenge');
+const Campaign = require('../models/Campaign');
 const Notification = require('../models/Notification');
 const Referral = require('../models/Referral');
 const Friendship = require('../models/Friendship');
 const DailyChecklist = require('../models/DailyChecklist');
 const Activity = require('../models/Activity');
 const ActivityCheer = require('../models/ActivityCheer');
+const Visit = require('../models/Visit');
 const { isSuperAdminUserId } = require('../constants/superAdmin');
 
 async function deleteUserFromSystem(userId) {
@@ -29,6 +31,18 @@ async function deleteUserFromSystem(userId) {
     error.status = 404;
     throw error;
   }
+
+  const ownedCampaignIds = await Campaign.find({ owner: userObjectId }).distinct('_id');
+  if (ownedCampaignIds.length > 0) {
+    await Challenge.deleteMany({ campaignId: { $in: ownedCampaignIds } });
+    await Notification.deleteMany({ campaignId: { $in: ownedCampaignIds } });
+    await Campaign.deleteMany({ _id: { $in: ownedCampaignIds } });
+  }
+
+  await Campaign.updateMany(
+    { $or: [{ 'members.userId': userObjectId }, { 'invites.userId': userObjectId }] },
+    { $pull: { members: { userId: userObjectId }, invites: { userId: userObjectId } } }
+  );
 
   const ownedChallengeIds = await Challenge.find({ owner: userObjectId }).distinct('_id');
 
@@ -56,7 +70,8 @@ async function deleteUserFromSystem(userId) {
       $pull: {
         likedBy: userObjectId,
         dislikedBy: userObjectId,
-        comments: { userId: userObjectId }
+        comments: { userId: userObjectId },
+        userDiaryEntries: { userId: userObjectId }
       }
     }
   );
@@ -76,6 +91,10 @@ async function deleteUserFromSystem(userId) {
     $or: [{ referrerId: userObjectId }, { refereeId: userObjectId }]
   });
   await DailyChecklist.deleteMany({ userId: userObjectId });
+  await Visit.updateMany(
+    { convertedUserId: userObjectId },
+    { $unset: { convertedUserId: 1, convertedAt: 1 } }
+  );
 
   const activityIds = await Activity.find({ actorId: userObjectId }).distinct('_id');
   await ActivityCheer.deleteMany({
@@ -86,6 +105,8 @@ async function deleteUserFromSystem(userId) {
   });
   await Activity.deleteMany({ actorId: userObjectId });
 
+  // Push subscriptions live on the user document and go with it.
+  // ImgBB URLs have no stored delete hash, so hosted images cannot be revoked.
   await User.findByIdAndDelete(userObjectId);
 
   return { id: String(userObjectId) };

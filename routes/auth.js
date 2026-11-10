@@ -76,6 +76,7 @@ const {
 } = require('../utils/sparksService');
 const { consumeInventoryTokenOrSpendSparks } = require('../utils/shopService');
 const { serializeUserForClient } = require('../utils/userSerializer');
+const { deleteUserFromSystem } = require('../utils/deleteUserService');
 const { awardUserStreakMilestones } = require('../utils/userStreak');
 const {
   buildChecklistTaskAwardKey,
@@ -158,7 +159,7 @@ router.get('/users/:id', async (req, res) => {
       });
     }
     
-    // Public profile lookup: do NOT expose email for arbitrary users.
+    // Public profile lookup: never expose email, checklists, or private mission counts.
     const user = await User.findById(id, {
       name: 1,
       avatarUrl: 1,
@@ -166,22 +167,24 @@ router.get('/users/:id', async (req, res) => {
       sparks: 1,
       createdAt: 1,
       _id: 1,
-      dailyChecklists: 1
+      status: 1
     }).lean();
     
-    if (!user) {
+    if (!user || user.status === 'disabled') {
       return res.status(404).json({ message: 'User not found' });
     }
     
-    const challengeCount = await countUserChallenges(user._id, { includePrivate: true });
-    
-    const rawOffset = req.headers['x-client-tz-offset'];
-    const tzOffsetMin = Number.isFinite(Number(rawOffset)) ? Number(rawOffset) : null;
-    const checklistHistory = await getChecklistHistory(user._id, user.dailyChecklists, tzOffsetMin);
+    const challengeCount = await countUserChallenges(user._id, { includePrivate: false });
 
-    const userObj = { ...user };
-    userObj.challengeCount = challengeCount;
-    userObj.checklistHistory = checklistHistory;
+    const userObj = {
+      _id: user._id,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+      xp: user.xp,
+      sparks: user.sparks,
+      createdAt: user.createdAt,
+      challengeCount
+    };
     
     res.json({
       message: 'User retrieved successfully',
@@ -460,6 +463,22 @@ router.get('/profile', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching profile', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
+  }
+});
+
+router.delete('/account', authenticateToken, authRateLimiter, async (req, res) => {
+  try {
+    await deleteUserFromSystem(req.user.id);
+    res.json({ message: 'Account deleted' });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error('Delete account error:', error);
+    }
+    res.status(status).json({
+      message: error.message || 'Error deleting account',
+      error: process.env.NODE_ENV === 'development' && status >= 500 ? error.message : undefined
+    });
   }
 });
 
