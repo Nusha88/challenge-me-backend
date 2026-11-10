@@ -13,6 +13,16 @@ const {
   isRangeWithinCampaign,
   hasBothSlots,
   hasPersonalTemplate,
+  extraSlotSpendKey,
+  extraSharedIds,
+  extraPersonalTemplates,
+  sharedChallengeIds,
+  personalTemplates,
+  canAddExtraShared,
+  canAddExtraPersonal,
+  EXTRA_SLOT_COST,
+  EXTRA_SHARED_MAX,
+  EXTRA_PERSONAL_MAX,
   findPersonalClone,
   shouldClonePersonal,
   resolveCampaignStatus,
@@ -111,5 +121,51 @@ const full = {
   }))
 };
 assert.strictEqual(remainingInviteSlots(full), 0);
+
+const extraCampaign = {
+  ...campaign,
+  extraSharedChallengeIds: ['ffffffffffffffffffffffff'],
+  extraPersonalTemplates: [{
+    challengeId: '111111111111111111111111',
+    title: 'Write a letter',
+    actions: [{ text: 'Draft', checked: false, children: [] }]
+  }],
+  personalClones: [
+    { userId: owner, challengeId: 'eeeeeeeeeeeeeeeeeeeeeeee' },
+    {
+      userId: owner,
+      challengeId: '222222222222222222222222',
+      sourceChallengeId: '111111111111111111111111'
+    }
+  ]
+};
+
+assert.strictEqual(EXTRA_SLOT_COST, 50);
+assert.strictEqual(EXTRA_SHARED_MAX, 1);
+assert.strictEqual(EXTRA_PERSONAL_MAX, 1);
+assert.strictEqual(
+  extraSlotSpendKey('dddddddddddddddddddddddd', 'shared', 1),
+  'campaign-extra-slot:dddddddddddddddddddddddd:shared:1'
+);
+assert.deepStrictEqual(extraSharedIds(campaign), []);
+assert.strictEqual(canAddExtraShared(campaign), true);
+assert.strictEqual(canAddExtraPersonal(campaign), true);
+assert.strictEqual(canAddExtraShared(extraCampaign), false);
+assert.strictEqual(canAddExtraPersonal(extraCampaign), false);
+assert.deepStrictEqual(sharedChallengeIds(extraCampaign), [
+  'dddddddddddddddddddddddd',
+  'ffffffffffffffffffffffff'
+]);
+assert.strictEqual(personalTemplates(extraCampaign).length, 2);
+assert.strictEqual(extraPersonalTemplates(extraCampaign).length, 1);
+assert.strictEqual(hasBothSlots(extraCampaign), true);
+assert.strictEqual(Boolean(findPersonalClone(extraCampaign, owner)), true);
+assert.strictEqual(
+  String(findPersonalClone(extraCampaign, owner, '111111111111111111111111').challengeId),
+  '222222222222222222222222'
+);
+assert.strictEqual(shouldClonePersonal(extraCampaign, owner), false);
+assert.strictEqual(shouldClonePersonal(extraCampaign, friend), true);
+assert.strictEqual(shouldClonePersonal(campaign, owner), false);
 
 console.log('campaignHelpers.test.js: all assertions passed');

@@ -4,10 +4,14 @@ const Friendship = require('../models/Friendship');
 const Notification = require('../models/Notification');
 const { notifyCampaignInvite, notifyChallengeJoin } = require('./notificationService');
 const { recordSquadJoinedSafe } = require('./chronicleService');
+const { spendSparksOnce } = require('./sparksService');
 const { sortedPair, toObjectId, isValidUserId, idOf } = require('./friendshipHelpers');
 const {
   CAMPAIGN_ROLES,
   OWNED_BLOCKING_STATUSES,
+  EXTRA_SHARED_MAX,
+  EXTRA_PERSONAL_MAX,
+  EXTRA_SLOT_COST,
   serviceError,
   isCampaignOwner,
   isCampaignMember,
@@ -19,6 +23,13 @@ const {
   isRangeWithinCampaign,
   hasBothSlots,
   hasPersonalTemplate,
+  extraSlotSpendKey,
+  extraSharedIds,
+  extraPersonalTemplates,
+  sharedChallengeIds,
+  personalTemplates,
+  canAddExtraShared,
+  canAddExtraPersonal,
   findPersonalClone,
   shouldClonePersonal,
   resolveCampaignStatus,
@@ -41,6 +52,7 @@ function populateCampaign(campaignId) {
     .populate('members.userId', 'name avatarUrl')
     .populate('invites.userId', 'name avatarUrl')
     .populate('sharedChallengeId', 'title challengeType startDate endDate inviteOnly privacy campaignRole')
+    .populate('extraSharedChallengeIds', 'title challengeType startDate endDate inviteOnly privacy campaignRole')
     .populate('personalClones.challengeId', 'title challengeType startDate endDate campaignRole');
 }
 
@@ -56,6 +68,52 @@ function templateChallengeIdFrom(campaign) {
   if (!value) return '';
   if (typeof value === 'object') return String(value._id || value.id || '');
   return String(value);
+}
+
+function emptyPersonalTemplate() {
+  return {
+    challengeId: null,
+    title: '',
+    description: '',
+    imageUrl: '',
+    actions: [],
+    reward: '',
+    difficulty: 'medium'
+  };
+}
+
+function withSpend(campaignPayload, spendResult = null) {
+  return {
+    campaign: campaignPayload,
+    sparksSpent: Number(spendResult?.sparksSpent || 0),
+    user: spendResult?.user || null
+  };
+}
+
+async function spendExtraSlot(ownerId, campaignId, kind) {
+  const result = await spendSparksOnce(
+    ownerId,
+    extraSlotSpendKey(campaignId, kind, 1),
+    EXTRA_SLOT_COST,
+    { campaignId: String(campaignId), kind }
+  );
+  if (result.success) return result;
+  if (result.reason === 'already_spent') {
+    return { success: true, sparksSpent: 0, user: result.user || null, reason: 'already_spent' };
+  }
+  if (result.reason === 'insufficient_sparks') {
+    throw serviceError('insufficient_sparks', 402);
+  }
+  throw serviceError(result.reason || 'unable_to_spend', 400);
+}
+
+function isSameChallenge(value, challengeId) {
+  return Boolean(challengeId) && idOf(value) === String(challengeId);
+}
+
+function extraPersonalIndexForChallenge(campaign, challengeId) {
+  const extras = campaign?.extraPersonalTemplates || [];
+  return extras.findIndex((template) => isSameChallenge(template.challengeId, challengeId));
 }
 
 async function presentCampaign(campaignId) {
@@ -220,12 +278,15 @@ async function prepareCreatedChallenge(campaignId, ownerId, fields = {}) {
   }
 
   if (role === CAMPAIGN_ROLES.SHARED) {
-    if (campaign.sharedChallengeId) throw serviceError('shared_taken', 409);
+    if (campaign.sharedChallengeId && !canAddExtraShared(campaign)) {
+      throw serviceError('shared_taken', 409);
+    }
     if (fields.challengeType && fields.challengeType !== 'habit') {
       throw serviceError('not_a_ritual', 400);
     }
     return {
       campaign,
+      extra: Boolean(campaign.sharedChallengeId),
       challengePatch: {
         campaignId: campaign._id,
         campaignRole: CAMPAIGN_ROLES.SHARED,
@@ -239,12 +300,15 @@ async function prepareCreatedChallenge(campaignId, ownerId, fields = {}) {
     };
   }
 
-  if (hasPersonalTemplate(campaign)) throw serviceError('personal_taken', 409);
+  if (hasPersonalTemplate(campaign) && !canAddExtraPersonal(campaign)) {
+    throw serviceError('personal_taken', 409);
+  }
   if (fields.challengeType && fields.challengeType !== 'result') {
     throw serviceError('not_a_quest', 400);
   }
   return {
     campaign,
+    extra: hasPersonalTemplate(campaign),
     challengePatch: {
       campaignId: campaign._id,
       campaignRole: CAMPAIGN_ROLES.PERSONAL_TEMPLATE,
@@ -258,23 +322,69 @@ async function prepareCreatedChallenge(campaignId, ownerId, fields = {}) {
   };
 }
 
+async function assignSharedChallenge(campaign, ownerId, challenge) {
+  if (isSameChallenge(campaign.sharedChallengeId, challenge._id)) {
+    return withSpend(await presentCampaign(campaign._id));
+  }
+  if (extraSharedIds(campaign).includes(String(challenge._id))) {
+    return withSpend(await presentCampaign(campaign._id));
+  }
+  if (!campaign.sharedChallengeId) {
+    campaign.sharedChallengeId = challenge._id;
+    await campaign.save();
+    return withSpend(await presentCampaign(campaign._id));
+  }
+  if (extraSharedIds(campaign).length >= EXTRA_SHARED_MAX) {
+    throw serviceError('shared_taken', 409);
+  }
+  const spendResult = await spendExtraSlot(ownerId, campaign._id, 'shared');
+  campaign.extraSharedUnlocked = true;
+  campaign.extraSharedChallengeIds = campaign.extraSharedChallengeIds || [];
+  campaign.extraSharedChallengeIds.push(challenge._id);
+  await campaign.save();
+  return withSpend(await presentCampaign(campaign._id), spendResult);
+}
+
+async function assignPersonalTemplate(campaign, ownerId, snapshot) {
+  const challengeId = snapshot?.challengeId;
+  if (isSameChallenge(campaign.personalTemplate?.challengeId, challengeId)) {
+    campaign.personalTemplate = snapshot;
+    await campaign.save();
+    return withSpend(await presentCampaign(campaign._id));
+  }
+  const extraIndex = extraPersonalIndexForChallenge(campaign, challengeId);
+  if (extraIndex >= 0) {
+    campaign.extraPersonalTemplates.set(extraIndex, snapshot);
+    campaign.markModified('extraPersonalTemplates');
+    await campaign.save();
+    return withSpend(await presentCampaign(campaign._id));
+  }
+  if (!hasPersonalTemplate(campaign)) {
+    campaign.personalTemplate = snapshot;
+    await campaign.save();
+    return withSpend(await presentCampaign(campaign._id));
+  }
+  if (extraPersonalTemplates(campaign).length >= EXTRA_PERSONAL_MAX) {
+    throw serviceError('personal_taken', 409);
+  }
+  const spendResult = await spendExtraSlot(ownerId, campaign._id, 'personal');
+  campaign.extraPersonalUnlocked = true;
+  campaign.extraPersonalTemplates = campaign.extraPersonalTemplates || [];
+  campaign.extraPersonalTemplates.push(snapshot);
+  await campaign.save();
+  return withSpend(await presentCampaign(campaign._id), spendResult);
+}
+
 async function finalizeCreatedChallenge(campaignId, ownerId, challenge) {
   const campaign = await loadCampaign(campaignId);
   assertDraftOwner(campaign, ownerId);
 
   if (challenge.campaignRole === CAMPAIGN_ROLES.SHARED) {
-    if (campaign.sharedChallengeId && String(campaign.sharedChallengeId) !== String(challenge._id)) {
-      throw serviceError('shared_taken', 409);
-    }
-    campaign.sharedChallengeId = challenge._id;
-    await campaign.save();
-    return presentCampaign(campaign._id);
+    return assignSharedChallenge(campaign, ownerId, challenge);
   }
 
   if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_TEMPLATE) {
-    campaign.personalTemplate = snapshotPersonalTemplate(challenge);
-    await campaign.save();
-    return presentCampaign(campaign._id);
+    return assignPersonalTemplate(campaign, ownerId, snapshotPersonalTemplate(challenge));
   }
 
   throw serviceError('invalid_slot', 400);
@@ -283,7 +393,9 @@ async function finalizeCreatedChallenge(campaignId, ownerId, challenge) {
 async function attachSharedSlot(campaignId, ownerId, challengeId) {
   const campaign = await loadCampaign(campaignId);
   assertDraftOwner(campaign, ownerId);
-  if (campaign.sharedChallengeId) throw serviceError('shared_taken', 409);
+  if (campaign.sharedChallengeId && !canAddExtraShared(campaign)) {
+    throw serviceError('shared_taken', 409);
+  }
   if (!isValidUserId(challengeId)) throw serviceError('invalid_challenge', 400);
 
   const challenge = await Challenge.findById(challengeId);
@@ -301,16 +413,17 @@ async function attachSharedSlot(campaignId, ownerId, challengeId) {
   challenge.invites = [];
   await challenge.save();
 
-  campaign.sharedChallengeId = challenge._id;
-  await campaign.save();
-  return presentCampaign(campaign._id);
+  return assignSharedChallenge(campaign, ownerId, challenge);
 }
 
 async function attachPersonalSlot(campaignId, ownerId, payload = {}) {
   const campaign = await loadCampaign(campaignId);
   assertDraftOwner(campaign, ownerId);
-  if (hasPersonalTemplate(campaign)) throw serviceError('personal_taken', 409);
+  if (hasPersonalTemplate(campaign) && !canAddExtraPersonal(campaign)) {
+    throw serviceError('personal_taken', 409);
+  }
 
+  let snapshot;
   if (payload.challengeId) {
     if (!isValidUserId(payload.challengeId)) throw serviceError('invalid_challenge', 400);
     const challenge = await Challenge.findById(payload.challengeId);
@@ -324,40 +437,35 @@ async function attachPersonalSlot(campaignId, ownerId, payload = {}) {
     challenge.startDate = campaign.startDate;
     challenge.endDate = campaign.endDate;
     await challenge.save();
-    campaign.personalTemplate = snapshotPersonalTemplate(challenge);
+    snapshot = snapshotPersonalTemplate(challenge);
   } else {
-    const snapshot = snapshotPersonalTemplate(payload);
+    snapshot = snapshotPersonalTemplate(payload);
     if (!snapshot.title || snapshot.actions.length === 0) {
       throw serviceError('personal_incomplete', 400);
     }
-    campaign.personalTemplate = snapshot;
   }
 
-  await campaign.save();
-  return presentCampaign(campaign._id);
+  return assignPersonalTemplate(campaign, ownerId, snapshot);
 }
 
-async function clonePersonalQuest(campaign, userId, joinDate) {
-  const existing = findPersonalClone(campaign, userId);
+async function cloneOnePersonalTemplate(campaign, userId, joinDate, template) {
+  const sourceId = idOf(template?.challengeId);
+  const existing = findPersonalClone(campaign, userId, sourceId);
   if (existing) return existing.challengeId;
 
-  let template = campaign.personalTemplate;
-  const source = await Challenge.findOne({
-    campaignId: campaign._id,
-    campaignRole: CAMPAIGN_ROLES.PERSONAL_TEMPLATE
-  });
-  if (source) {
-    template = snapshotPersonalTemplate(source);
-    campaign.personalTemplate = template;
+  let snapshot = template;
+  if (sourceId) {
+    const source = await Challenge.findById(sourceId);
+    if (source) snapshot = snapshotPersonalTemplate(source);
   }
-  if (!template?.title || !Array.isArray(template.actions) || template.actions.length === 0) {
+  if (!snapshot?.title || !Array.isArray(snapshot.actions) || snapshot.actions.length === 0) {
     throw serviceError('personal_incomplete', 400);
   }
 
   const cloned = new Challenge({
-    title: template.title,
-    description: template.description || '',
-    imageUrl: template.imageUrl || '',
+    title: snapshot.title,
+    description: snapshot.description || '',
+    imageUrl: snapshot.imageUrl || '',
     privacy: 'private',
     inviteOnly: false,
     visibility: true,
@@ -365,9 +473,9 @@ async function clonePersonalQuest(campaign, userId, joinDate) {
     startDate: campaign.startDate,
     endDate: campaign.endDate,
     owner: userId,
-    difficulty: template.difficulty || 'medium',
-    reward: template.reward || '',
-    actions: cloneActionsUnchecked(template.actions),
+    difficulty: snapshot.difficulty || 'medium',
+    reward: snapshot.reward || '',
+    actions: cloneActionsUnchecked(snapshot.actions),
     allowComments: false,
     campaignId: campaign._id,
     campaignRole: CAMPAIGN_ROLES.PERSONAL_CLONE,
@@ -381,16 +489,26 @@ async function clonePersonalQuest(campaign, userId, joinDate) {
 
   campaign.personalClones.push({
     userId: toObjectId(userId),
-    challengeId: cloned._id
+    challengeId: cloned._id,
+    sourceChallengeId: sourceId ? toObjectId(sourceId) : null
   });
   return cloned._id;
 }
 
-async function joinSharedRitual(campaign, userId, joinDate) {
-  if (!campaign.sharedChallengeId) throw serviceError('shared_missing', 400);
+async function clonePersonalQuest(campaign, userId, joinDate) {
+  const templates = personalTemplates(campaign);
+  if (templates.length === 0) throw serviceError('personal_incomplete', 400);
+  let lastId = null;
+  for (const template of templates) {
+    lastId = await cloneOnePersonalTemplate(campaign, userId, joinDate, template);
+  }
+  return lastId;
+}
+
+async function joinOneSharedRitual(challengeId, userId, joinDate, campaign) {
   const updated = await Challenge.findOneAndUpdate(
     {
-      _id: campaign.sharedChallengeId,
+      _id: challengeId,
       'participants.userId': { $ne: toObjectId(userId) }
     },
     {
@@ -414,6 +532,46 @@ async function joinSharedRitual(campaign, userId, joinDate) {
   return updated;
 }
 
+async function joinSharedRitual(campaign, userId, joinDate) {
+  const ids = sharedChallengeIds(campaign);
+  if (ids.length === 0) throw serviceError('shared_missing', 400);
+  let last = null;
+  for (const challengeId of ids) {
+    last = await joinOneSharedRitual(challengeId, userId, joinDate, campaign);
+  }
+  return last;
+}
+
+async function pullFromSharedRituals(campaign, userId) {
+  const ids = sharedChallengeIds(campaign);
+  if (ids.length === 0) return;
+  const participantId = toObjectId(userId);
+  await Challenge.updateMany(
+    { _id: { $in: ids }, 'participants.userId': participantId },
+    { $pull: { participants: { userId: participantId } } }
+  );
+}
+
+async function refreshPersonalSnapshots(campaign) {
+  const templates = personalTemplates(campaign);
+  for (const template of templates) {
+    const sourceId = idOf(template?.challengeId);
+    if (!sourceId) continue;
+    const source = await Challenge.findById(sourceId);
+    if (!source) continue;
+    const snapshot = snapshotPersonalTemplate(source);
+    if (isSameChallenge(campaign.personalTemplate?.challengeId, sourceId)) {
+      campaign.personalTemplate = snapshot;
+      continue;
+    }
+    const extraIndex = extraPersonalIndexForChallenge(campaign, sourceId);
+    if (extraIndex >= 0) {
+      campaign.extraPersonalTemplates.set(extraIndex, snapshot);
+      campaign.markModified('extraPersonalTemplates');
+    }
+  }
+}
+
 async function clearCampaignInviteNotifications(campaignId, userId) {
   await Notification.deleteMany({
     type: 'campaign_invite',
@@ -427,13 +585,7 @@ async function publish(campaignId, ownerId, joinDate) {
   assertDraftOwner(campaign, ownerId);
   if (!hasBothSlots(campaign)) throw serviceError('slots_incomplete', 400);
 
-  const source = await Challenge.findOne({
-    campaignId: campaign._id,
-    campaignRole: CAMPAIGN_ROLES.PERSONAL_TEMPLATE
-  });
-  if (source) {
-    campaign.personalTemplate = snapshotPersonalTemplate(source);
-  }
+  await refreshPersonalSnapshots(campaign);
   if (!hasPersonalTemplate(campaign)) throw serviceError('slots_incomplete', 400);
   if (!(campaign.invites || []).some((row) => idOf(row.userId))) {
     throw serviceError('invites_required', 400);
@@ -501,12 +653,7 @@ async function leaveCampaign(campaignId, userId) {
   campaign.members = campaign.members.filter((row) => idOf(row.userId) !== String(userId));
   await campaign.save();
 
-  if (campaign.sharedChallengeId) {
-    await Challenge.updateOne(
-      { _id: campaign.sharedChallengeId, 'participants.userId': userId },
-      { $pull: { participants: { userId } } }
-    );
-  }
+  await pullFromSharedRituals(campaign, userId);
 
   return presentCampaign(campaign._id);
 }
@@ -522,13 +669,7 @@ async function kickCampaignMember(campaignId, ownerId, targetUserId) {
   campaign.members = campaign.members.filter((row) => idOf(row.userId) !== String(targetUserId));
   await campaign.save();
 
-  if (campaign.sharedChallengeId) {
-    const kickedId = toObjectId(targetUserId);
-    await Challenge.updateOne(
-      { _id: campaign.sharedChallengeId, 'participants.userId': kickedId },
-      { $pull: { participants: { userId: kickedId } } }
-    );
-  }
+  await pullFromSharedRituals(campaign, targetUserId);
 
   return presentCampaign(campaign._id);
 }
@@ -545,6 +686,7 @@ async function listForUser(userId) {
     .populate('members.userId', 'name avatarUrl')
     .populate('invites.userId', 'name avatarUrl')
     .populate('sharedChallengeId', 'title challengeType startDate endDate inviteOnly privacy campaignRole')
+    .populate('extraSharedChallengeIds', 'title challengeType startDate endDate inviteOnly privacy campaignRole')
     .populate('personalClones.challengeId', 'title challengeType startDate endDate campaignRole')
     .sort({ createdAt: -1 });
 
@@ -567,9 +709,19 @@ async function assertQuestStructureEditable(challenge) {
 }
 
 async function findPersonalTemplateChallengeId(campaignId) {
+  const campaign = await Campaign.findById(campaignId)
+    .select('personalTemplate.challengeId extraPersonalTemplates.challengeId')
+    .lean();
+  const primaryId = idOf(campaign?.personalTemplate?.challengeId);
+  if (primaryId) return primaryId;
+
+  const extraIds = (campaign?.extraPersonalTemplates || [])
+    .map((template) => idOf(template.challengeId))
+    .filter(Boolean);
   const template = await Challenge.findOne({
     campaignId,
-    campaignRole: CAMPAIGN_ROLES.PERSONAL_TEMPLATE
+    campaignRole: CAMPAIGN_ROLES.PERSONAL_TEMPLATE,
+    ...(extraIds.length ? { _id: { $nin: extraIds } } : {})
   }).select('_id').lean();
   return template?._id ? String(template._id) : '';
 }
@@ -589,7 +741,18 @@ async function syncDraftSlotAfterChallengeSave(challenge) {
   if (!challenge?.campaignId || challenge.campaignRole !== CAMPAIGN_ROLES.PERSONAL_TEMPLATE) return;
   const campaign = await Campaign.findById(challenge.campaignId);
   if (!campaign || campaign.status !== 'draft') return;
-  campaign.personalTemplate = snapshotPersonalTemplate(challenge);
+  const snapshot = snapshotPersonalTemplate(challenge);
+  if (
+    !hasPersonalTemplate(campaign)
+    || isSameChallenge(campaign.personalTemplate?.challengeId, challenge._id)
+  ) {
+    campaign.personalTemplate = snapshot;
+  } else {
+    const extraIndex = extraPersonalIndexForChallenge(campaign, challenge._id);
+    if (extraIndex < 0) return;
+    campaign.extraPersonalTemplates.set(extraIndex, snapshot);
+    campaign.markModified('extraPersonalTemplates');
+  }
   await campaign.save();
 }
 
@@ -598,25 +761,29 @@ async function detachDraftSlotOnChallengeDelete(challenge) {
   const campaign = await Campaign.findById(challenge.campaignId);
   if (!campaign || campaign.status !== 'draft') return;
 
-  if (
-    challenge.campaignRole === CAMPAIGN_ROLES.SHARED
-    && String(campaign.sharedChallengeId || '') === String(challenge._id)
-  ) {
-    campaign.sharedChallengeId = null;
+  if (challenge.campaignRole === CAMPAIGN_ROLES.SHARED) {
+    if (isSameChallenge(campaign.sharedChallengeId, challenge._id)) {
+      campaign.sharedChallengeId = null;
+      await campaign.save();
+      return;
+    }
+    const extraIds = extraSharedIds(campaign);
+    if (!extraIds.includes(String(challenge._id))) return;
+    campaign.extraSharedChallengeIds = (campaign.extraSharedChallengeIds || [])
+      .filter((value) => !isSameChallenge(value, challenge._id));
     await campaign.save();
     return;
   }
 
   if (challenge.campaignRole === CAMPAIGN_ROLES.PERSONAL_TEMPLATE) {
-    campaign.personalTemplate = {
-      challengeId: null,
-      title: '',
-      description: '',
-      imageUrl: '',
-      actions: [],
-      reward: '',
-      difficulty: 'medium'
-    };
+    if (isSameChallenge(campaign.personalTemplate?.challengeId, challenge._id)) {
+      campaign.personalTemplate = emptyPersonalTemplate();
+      await campaign.save();
+      return;
+    }
+    const extraIndex = extraPersonalIndexForChallenge(campaign, challenge._id);
+    if (extraIndex < 0) return;
+    campaign.extraPersonalTemplates.splice(extraIndex, 1);
     await campaign.save();
   }
 }

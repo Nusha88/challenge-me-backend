@@ -4,6 +4,9 @@ const { getInclusiveDaysBetween } = require('./challengeHelpers');
 const MIN_CAMPAIGN_DAYS = 7;
 const MAX_CAMPAIGN_DAYS = 21;
 const MAX_CAMPAIGN_MEMBERS = 8;
+const EXTRA_SHARED_MAX = 1;
+const EXTRA_PERSONAL_MAX = 1;
+const EXTRA_SLOT_COST = 50;
 const CAMPAIGN_ROLES = Object.freeze({
   SHARED: 'shared',
   PERSONAL_TEMPLATE: 'personalTemplate',
@@ -113,14 +116,71 @@ function hasBothSlots(campaign) {
   return Boolean(campaign?.sharedChallengeId) && hasPersonalTemplate(campaign);
 }
 
-function findPersonalClone(campaign, userId) {
+function extraSlotSpendKey(campaignId, kind, index = 1) {
+  return `campaign-extra-slot:${campaignId}:${kind}:${index}`;
+}
+
+function extraSharedIds(campaign) {
+  return (campaign?.extraSharedChallengeIds || []).map((value) => idOf(value)).filter(Boolean);
+}
+
+function extraPersonalTemplates(campaign) {
+  return (campaign?.extraPersonalTemplates || []).filter((template) => {
+    const title = String(template?.title || '').trim();
+    const actions = template?.actions;
+    return Boolean(title) && Array.isArray(actions) && actions.length > 0;
+  });
+}
+
+function sharedChallengeIds(campaign) {
+  const primary = idOf(campaign?.sharedChallengeId);
+  const ids = primary ? [primary] : [];
+  for (const extraId of extraSharedIds(campaign)) {
+    if (!ids.includes(extraId)) ids.push(extraId);
+  }
+  return ids;
+}
+
+function personalTemplates(campaign) {
+  const list = [];
+  if (hasPersonalTemplate(campaign)) list.push(campaign.personalTemplate);
+  list.push(...extraPersonalTemplates(campaign));
+  return list;
+}
+
+function canAddExtraShared(campaign) {
+  return Boolean(campaign?.sharedChallengeId) && extraSharedIds(campaign).length < EXTRA_SHARED_MAX;
+}
+
+function canAddExtraPersonal(campaign) {
+  return hasPersonalTemplate(campaign) && extraPersonalTemplates(campaign).length < EXTRA_PERSONAL_MAX;
+}
+
+function primaryTemplateChallengeId(campaign) {
+  return idOf(campaign?.personalTemplate?.challengeId);
+}
+
+function findPersonalClone(campaign, userId, sourceChallengeId) {
   if (!userId) return null;
   const id = String(userId);
-  return (campaign?.personalClones || []).find((row) => idOf(row.userId) === id) || null;
+  const source = sourceChallengeId ? String(sourceChallengeId) : '';
+  const primaryId = primaryTemplateChallengeId(campaign);
+  return (campaign?.personalClones || []).find((row) => {
+    if (idOf(row.userId) !== id) return false;
+    const rowSource = idOf(row.sourceChallengeId);
+    if (!source || source === primaryId) {
+      return !rowSource || rowSource === primaryId;
+    }
+    return rowSource === source;
+  }) || null;
 }
 
 function shouldClonePersonal(campaign, userId) {
-  return Boolean(hasPersonalTemplate(campaign) && userId && !findPersonalClone(campaign, userId));
+  if (!userId) return false;
+  return personalTemplates(campaign).some((template) => {
+    const sourceId = idOf(template?.challengeId);
+    return !findPersonalClone(campaign, userId, sourceId);
+  });
 }
 
 function resolveCampaignStatus(campaign, today = new Date()) {
@@ -202,6 +262,9 @@ module.exports = {
   MIN_CAMPAIGN_DAYS,
   MAX_CAMPAIGN_DAYS,
   MAX_CAMPAIGN_MEMBERS,
+  EXTRA_SHARED_MAX,
+  EXTRA_PERSONAL_MAX,
+  EXTRA_SLOT_COST,
   CAMPAIGN_ROLES,
   OWNED_BLOCKING_STATUSES,
   serviceError,
@@ -220,6 +283,14 @@ module.exports = {
   isRangeWithinCampaign,
   hasPersonalTemplate,
   hasBothSlots,
+  extraSlotSpendKey,
+  extraSharedIds,
+  extraPersonalTemplates,
+  sharedChallengeIds,
+  personalTemplates,
+  canAddExtraShared,
+  canAddExtraPersonal,
+  primaryTemplateChallengeId,
   findPersonalClone,
   shouldClonePersonal,
   resolveCampaignStatus,

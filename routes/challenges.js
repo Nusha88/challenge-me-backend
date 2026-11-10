@@ -466,9 +466,12 @@ router.post('/', authenticateToken, async (req, res) => {
         Object.assign(challengeData, prepared.challengePatch);
       } catch (campaignError) {
         const status = campaignError.status || 400;
+        const reason = campaignError.reason || 'campaign';
         return res.status(status).json({
-          message: campaignError.message || 'Unable to attach this mission to the challenge',
-          reason: campaignError.reason || 'campaign'
+          message: reason === 'insufficient_sparks'
+            ? 'Not enough Sparks'
+            : (campaignError.message || 'Unable to attach this mission to the challenge'),
+          reason
         });
       }
     }
@@ -476,15 +479,20 @@ router.post('/', authenticateToken, async (req, res) => {
     const challenge = new Challenge(challengeData);
     await challenge.save();
 
+    let extraSlotSpend = { sparksSpent: 0, user: null };
     if (challenge.campaignId) {
       try {
-        await finalizeCreatedChallenge(challenge.campaignId, owner, challenge);
+        extraSlotSpend = await finalizeCreatedChallenge(challenge.campaignId, owner, challenge)
+          || extraSlotSpend;
       } catch (campaignError) {
         await Challenge.deleteOne({ _id: challenge._id });
         const status = campaignError.status || 400;
+        const reason = campaignError.reason || 'campaign';
         return res.status(status).json({
-          message: campaignError.message || 'Unable to attach this mission to the challenge',
-          reason: campaignError.reason || 'campaign'
+          message: reason === 'insufficient_sparks'
+            ? 'Not enough Sparks'
+            : (campaignError.message || 'Unable to attach this mission to the challenge'),
+          reason
         });
       }
     }
@@ -505,11 +513,19 @@ router.post('/', authenticateToken, async (req, res) => {
       .populate('participants.userId', 'name avatarUrl')
       .populate('invites.userId', 'name avatarUrl');
 
-    res.status(201).json({
+    const createdPayload = {
       message: 'Challenge created successfully',
       challenge: createdChallenge,
       ...welcomeBonusPayload
-    });
+    };
+    if (extraSlotSpend.sparksSpent) {
+      createdPayload.sparksSpent = extraSlotSpend.sparksSpent;
+    }
+    if (extraSlotSpend.user && !createdPayload.user) {
+      createdPayload.user = serializeUserForClient(extraSlotSpend.user);
+    }
+
+    res.status(201).json(createdPayload);
   } catch (error) {
     res.status(500).json({ message: 'Error creating challenge', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }

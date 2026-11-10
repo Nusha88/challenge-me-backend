@@ -71,6 +71,20 @@ const campaignSchema = new mongoose.Schema(
       ref: 'Challenge',
       default: null
     },
+    extraSharedChallengeIds: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Challenge'
+      }
+    ],
+    extraSharedUnlocked: {
+      type: Boolean,
+      default: false
+    },
+    extraPersonalUnlocked: {
+      type: Boolean,
+      default: false
+    },
     personalTemplate: {
       challengeId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -88,6 +102,25 @@ const campaignSchema = new mongoose.Schema(
         default: 'medium'
       }
     },
+    extraPersonalTemplates: [
+      {
+        challengeId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Challenge',
+          default: null
+        },
+        title: { type: String, default: '' },
+        description: { type: String, default: '' },
+        imageUrl: { type: String, default: '' },
+        actions: { type: Array, default: [] },
+        reward: { type: String, default: '' },
+        difficulty: {
+          type: String,
+          enum: ['easy', 'medium', 'heroic'],
+          default: 'medium'
+        }
+      }
+    ],
     personalClones: [
       {
         userId: {
@@ -99,6 +132,11 @@ const campaignSchema = new mongoose.Schema(
           type: mongoose.Schema.Types.ObjectId,
           ref: 'Challenge',
           required: true
+        },
+        sourceChallengeId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Challenge',
+          default: null
         }
       }
     ]

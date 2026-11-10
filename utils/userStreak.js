@@ -42,6 +42,44 @@ function isUserActiveOnDate({
   return false;
 }
 
+const MAX_STREAK_SKIPS = 2;
+const MAX_CONSECUTIVE_EMPTY = 2;
+
+function resolveStreakFromDays(isFilled, { todayIsGrace = true, maxDays = 365 } = {}) {
+  let days = 0;
+  let totalSkipped = 0;
+  let consecutiveEmpty = 0;
+  let leadingEmpty = 0;
+  let seenLive = false;
+  let countedToday = false;
+
+  for (let i = 0; i < maxDays; i += 1) {
+    if (isFilled(i)) {
+      consecutiveEmpty = 0;
+      days += 1;
+      seenLive = true;
+      if (i === 0) countedToday = true;
+      continue;
+    }
+
+    if (i === 0 && todayIsGrace) continue;
+
+    consecutiveEmpty += 1;
+    totalSkipped += 1;
+    if (!seenLive) leadingEmpty = consecutiveEmpty;
+    if (consecutiveEmpty > MAX_CONSECUTIVE_EMPTY || totalSkipped > MAX_STREAK_SKIPS) {
+      if (!seenLive) return { days: 0, status: 'empty' };
+      break;
+    }
+  }
+
+  if (days === 0) return { days: 0, status: 'empty' };
+  if (countedToday) return { days, status: 'live' };
+  if (leadingEmpty >= 2) return { days, status: 'cooled' };
+  if (leadingEmpty >= 1) return { days, status: 'paused' };
+  return { days, status: 'live' };
+}
+
 async function loadHabitChallenges(userId) {
   return Challenge.find({
     challengeType: 'habit',
@@ -56,27 +94,19 @@ async function calculateUserStreak(req, user, habitChallenges) {
   }
 
   const checklistsByLocalDate = await findManyByLocalDates(user._id, streakDayKeys);
-  let currentStreak = 0;
-
-  for (let i = 0; i < 365; i += 1) {
-    const { startUtc, endUtc, clientDayStr } = getClientDayRange(req, -i);
-    if (isUserActiveOnDate({
+  const resolved = resolveStreakFromDays((index) => {
+    const { startUtc, endUtc, clientDayStr } = getClientDayRange(req, -index);
+    return isUserActiveOnDate({
       user,
       habitChallenges,
       checklistsByLocalDate,
       startUtc,
       endUtc,
       dateStr: clientDayStr
-    })) {
-      currentStreak += 1;
-    } else if (i === 0) {
-      continue;
-    } else {
-      break;
-    }
-  }
+    });
+  });
 
-  return currentStreak;
+  return resolved.days;
 }
 
 async function awardUserStreakMilestones(req, user, habitChallenges = null) {
@@ -111,6 +141,7 @@ async function awardUserStreakMilestones(req, user, habitChallenges = null) {
 
 module.exports = {
   isUserActiveOnDate,
+  resolveStreakFromDays,
   calculateUserStreak,
   awardUserStreakMilestones
 };

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authenticateToken = require('../middleware/authenticateToken');
 const { getClientDayRange } = require('../utils/dateHelpers');
+const { serializeUserForClient } = require('../utils/userSerializer');
 const {
   createDraft,
   updateDraft,
@@ -42,8 +43,16 @@ const ERROR_MESSAGES = {
   owner_cannot_leave: 'The organizer cannot leave the challenge',
   not_a_member: 'You are not in this challenge',
   shared_missing: 'The shared ritual is missing',
-  invalid_user: 'Invalid user'
+  invalid_user: 'Invalid user',
+  insufficient_sparks: 'Not enough Sparks'
 };
+
+function sendCampaignWithSpend(res, result) {
+  const payload = { campaign: result?.campaign || result };
+  if (result?.sparksSpent) payload.sparksSpent = result.sparksSpent;
+  if (result?.user) payload.user = serializeUserForClient(result.user);
+  return res.json(payload);
+}
 
 function sendCampaignError(res, error) {
   const status = error.status || 500;
@@ -105,8 +114,8 @@ router.delete('/:id', async (req, res) => {
 
 router.post('/:id/slots/shared', async (req, res) => {
   try {
-    const campaign = await attachSharedSlot(req.params.id, req.user.id, req.body?.challengeId);
-    res.json({ campaign });
+    const result = await attachSharedSlot(req.params.id, req.user.id, req.body?.challengeId);
+    sendCampaignWithSpend(res, result);
   } catch (error) {
     sendCampaignError(res, error);
   }
@@ -114,8 +123,8 @@ router.post('/:id/slots/shared', async (req, res) => {
 
 router.post('/:id/slots/personal', async (req, res) => {
   try {
-    const campaign = await attachPersonalSlot(req.params.id, req.user.id, req.body || {});
-    res.json({ campaign });
+    const result = await attachPersonalSlot(req.params.id, req.user.id, req.body || {});
+    sendCampaignWithSpend(res, result);
   } catch (error) {
     sendCampaignError(res, error);
   }
